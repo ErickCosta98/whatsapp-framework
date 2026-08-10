@@ -23,6 +23,13 @@ export interface WhatsAppEngineConfig {
   logLevel?: string;
   /** Maximum media upload size in bytes. Default: 50 MB. */
   mediaMaxSize?: number;
+  /**
+   * Whether to sync message history on initial connection (populates LID
+   * mappings). Enabling this on every reconnect causes 428 disconnects
+   * under load — it should only fire on the first login.
+   * Default: false.
+   */
+  syncHistoryOnConnect?: boolean;
 }
 
 export type ChatState = "typing" | "recording" | "paused";
