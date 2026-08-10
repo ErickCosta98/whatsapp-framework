@@ -1,5 +1,5 @@
 {
-  "name": "@gentle/whatsapp-framework",
+  "name": "@erickcosta98/whatsapp-framework",
   "version": "0.1.0",
   "private": true,
   "description": "Unified WhatsApp engine built on Baileys with multi-session, anti-ban, and database abstraction",
