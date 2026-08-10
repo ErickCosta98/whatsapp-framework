@@ -21,5 +21,4 @@ export * from "./anti-ban/throttling.js";
 export * from "./lid/resolver.js";
 export * from "./retry/store.js";
 export * from "./normalizer.js";
-export { SQLiteAdapter } from "./adapters/sqlite.js";
 //# sourceMappingURL=index.d.ts.map

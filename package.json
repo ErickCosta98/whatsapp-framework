@@ -17,6 +17,10 @@
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
     },
+    "./sqlite": {
+      "import": "./dist/adapters/sqlite.js",
+      "types": "./dist/adapters/sqlite.d.ts"
+    },
     "./mysql": {
       "import": "./dist/adapters/mysql.js",
       "types": "./dist/adapters/mysql.d.ts"
