@@ -1,8 +1,14 @@
 {
   "name": "@erickcosta98/whatsapp-framework",
   "version": "0.1.0",
-  "private": true,
   "description": "Unified WhatsApp engine built on Baileys with multi-session, anti-ban, and database abstraction",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ErickCosta98/whatsapp-framework"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
