@@ -133,6 +133,8 @@ export function normalizeIncomingMessage(
     senderPhone = lidMap.get(from) ?? null;
   }
 
+  const pushName = msg.pushName ?? null;
+
   const timestamp =
     typeof unwrapped.messageTimestamp === "number"
       ? unwrapped.messageTimestamp
@@ -169,6 +171,7 @@ export function normalizeIncomingMessage(
     ephemeralDuration,
     isLidSender,
     senderPhone,
+    pushName,
     viewOnce,
   };
 }

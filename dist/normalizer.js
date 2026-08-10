@@ -111,6 +111,7 @@ export function normalizeIncomingMessage(msg, lidMap) {
     if (isLidSender && lidMap) {
         senderPhone = lidMap.get(from) ?? null;
     }
+    const pushName = msg.pushName ?? null;
     const timestamp = typeof unwrapped.messageTimestamp === "number"
         ? unwrapped.messageTimestamp
         : Number(unwrapped.messageTimestamp ?? 0);
@@ -140,6 +141,7 @@ export function normalizeIncomingMessage(msg, lidMap) {
         ephemeralDuration,
         isLidSender,
         senderPhone,
+        pushName,
         viewOnce,
     };
 }

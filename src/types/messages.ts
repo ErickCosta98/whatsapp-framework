@@ -65,6 +65,8 @@ export interface NormalizedMessage {
   ephemeralDuration?: number;
   isLidSender?: boolean;
   senderPhone?: string | null;
+  /** Sender's WhatsApp profile name (Baileys pushName). */
+  pushName?: string | null;
   viewOnce?: boolean;
 }
 
