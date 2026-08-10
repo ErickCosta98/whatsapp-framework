@@ -1,0 +1,68 @@
+{
+  "name": "@gentle/whatsapp-framework",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Unified WhatsApp engine built on Baileys with multi-session, anti-ban, and database abstraction",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./mysql": {
+      "import": "./dist/adapters/mysql.js",
+      "types": "./dist/adapters/mysql.d.ts"
+    },
+    "./postgres": {
+      "import": "./dist/adapters/postgres.js",
+      "types": "./dist/adapters/postgres.d.ts"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "whatsapp",
+    "baileys",
+    "multi-session",
+    "messaging"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@whiskeysockets/baileys": "^7.0.0-rc13",
+    "pino": "^9.0.0"
+  },
+  "peerDependencies": {
+    "better-sqlite3": "^11.0.0",
+    "mysql2": "^3.0.0",
+    "pg": "^8.0.0"
+  },
+  "peerDependenciesMeta": {
+    "better-sqlite3": {
+      "optional": true
+    },
+    "mysql2": {
+      "optional": true
+    },
+    "pg": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.0.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
