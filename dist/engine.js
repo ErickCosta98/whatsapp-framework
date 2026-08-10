@@ -57,7 +57,7 @@ export class WhatsAppEngine extends EventEmitter {
             messageStoreCap: config.messageStoreCap ?? 5_000,
             logLevel: config.logLevel ?? "warn",
             mediaMaxSize: config.mediaMaxSize ?? DEFAULT_MEDIA_CAP_BYTES,
-            syncHistoryOnConnect: config.syncHistoryOnConnect ?? false,
+            syncFullHistory: config.syncFullHistory ?? false,
         };
     }
     /* ─── Public API ─── */
@@ -101,8 +101,6 @@ export class WhatsAppEngine extends EventEmitter {
         // Clear any stale reconnect timer before starting fresh.
         this.sessions.clearReconnectTimer(name);
         const authDir = path.join(this.config.authDir, name);
-        const credsPath = path.join(authDir, "creds.json");
-        const hasExistingCreds = fs.existsSync(credsPath);
         await fs.promises.mkdir(authDir, { recursive: true });
         const { state, saveCreds } = await useMultiFileAuthState(authDir);
         state.keys = makeCacheableSignalKeyStore(state.keys, this.logger);
@@ -140,10 +138,8 @@ export class WhatsAppEngine extends EventEmitter {
             logger: this.logger,
             printQRInTerminal: false,
             markOnlineOnConnect: this.config.markOnlineOnConnect,
-            shouldSyncHistoryMessage: this.config.syncHistoryOnConnect
-                ? () => true
-                : () => !hasExistingCreds,
-            syncFullHistory: false,
+            shouldSyncHistoryMessage: () => true,
+            syncFullHistory: this.config.syncFullHistory,
             getMessage: async (key) => {
                 if (!key?.id)
                     return undefined;

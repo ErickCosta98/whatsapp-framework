@@ -24,12 +24,13 @@ export interface WhatsAppEngineConfig {
   /** Maximum media upload size in bytes. Default: 50 MB. */
   mediaMaxSize?: number;
   /**
-   * Whether to sync message history on initial connection (populates LID
-   * mappings). Enabling this on every reconnect causes 428 disconnects
-   * under load — it should only fire on the first login.
+   * Whether to download the full message history on initial sync.
+   * When false (default), WhatsApp sends only the RECENT window +
+   * the complete contact/app-state snapshot — which is what populates
+   * LID mappings. Enable only if you need the full chat backlog.
    * Default: false.
    */
-  syncHistoryOnConnect?: boolean;
+  syncFullHistory?: boolean;
 }
 
 export type ChatState = "typing" | "recording" | "paused";
