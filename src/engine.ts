@@ -1,6 +1,15 @@
 import { EventEmitter } from "events";
 import type { Logger } from "pino";
 import pino from "pino";
+import makeWASocket, {
+  useMultiFileAuthState,
+  fetchLatestBaileysVersion,
+  makeCacheableSignalKeyStore,
+  type ConnectionState,
+  type WAMessage,
+} from "@whiskeysockets/baileys";
+import * as fs from "node:fs";
+import * as path from "node:path";
 
 import type {
   IDatabaseAdapter,
@@ -11,6 +20,11 @@ import type {
   EngineEventMap,
 } from "./types/index.js";
 import { SessionManager } from "./session.js";
+import { calculateBackoffDelay, isTerminalError } from "./reconnect/backoff.js";
+import { simulateTyping } from "./anti-ban/typing.js";
+import { resolveDeliverableJid } from "./lid/resolver.js";
+import { normalizeIncomingMessage, normalizeSentResult, DEFAULT_MEDIA_CAP_BYTES } from "./normalizer.js";
+import { createMessageStore, type MessageStore } from "./retry/store.js";
 
 /**
  * Core WhatsApp engine managing multiple named sessions, connection lifecycle,
@@ -38,10 +52,11 @@ export class WhatsAppEngine extends EventEmitter {
   private sessions: SessionManager;
   private adapter: IDatabaseAdapter | null = null;
 
-  /** In-memory fallback message store for Baileys retry protocol. */
-  // TODO(phase-2): wire messageStore for Baileys retry protocol
-  // private messageStore: Map<string, { key: unknown; message: unknown }> = new Map();
-  // private static readonly DEFAULT_MESSAGE_STORE_CAP = 5_000;
+  /** In-memory LID → phone lookup table shared across sessions. */
+  private lidMap = new Map<string, string>();
+
+  /** Per-session in-memory message stores for Baileys retry protocol. */
+  private messageStores = new Map<string, MessageStore>();
 
   constructor(config: WhatsAppEngineConfig) {
     super();
@@ -57,7 +72,7 @@ export class WhatsAppEngine extends EventEmitter {
   ): Required<WhatsAppEngineConfig> {
     return {
       authDir: config.authDir,
-      browser: config.browser ?? ["Gentle", "Chrome", "120.0.0"],
+      browser: config.browser ?? ["WhatsApp Framework", "Chrome", "120.0.0"],
       markOnlineOnConnect: config.markOnlineOnConnect ?? false,
       simulateTyping: config.simulateTyping ?? true,
       simulateTypingMaxMs: config.simulateTypingMaxMs ?? 5_000,
@@ -65,6 +80,7 @@ export class WhatsAppEngine extends EventEmitter {
       randomizeDelay: config.randomizeDelay ?? true,
       messageStoreCap: config.messageStoreCap ?? 5_000,
       logLevel: config.logLevel ?? "warn",
+      mediaMaxSize: config.mediaMaxSize ?? DEFAULT_MEDIA_CAP_BYTES,
     };
   }
 
@@ -95,8 +111,160 @@ export class WhatsAppEngine extends EventEmitter {
     if (!this.adapter) {
       throw new Error("Database adapter not registered");
     }
-    // TODO: implement connection lifecycle in Phase 2
-    this.logger.warn({ session: name }, "connect() not yet implemented");
+
+    const session = this.sessions.create(name);
+    if (session.connecting) {
+      this.logger.warn({ session: name }, "connect() already in progress");
+      return;
+    }
+
+    this.sessions.setConnecting(name, true);
+    try {
+      await this.connectInner(name);
+    } finally {
+      this.sessions.setConnecting(name, false);
+    }
+  }
+
+  private async connectInner(name: string): Promise<void> {
+    // Clear any stale reconnect timer before starting fresh.
+    this.sessions.clearReconnectTimer(name);
+
+    const authDir = path.join(this.config.authDir, name);
+    await fs.promises.mkdir(authDir, { recursive: true });
+
+    const { state, saveCreds } = await useMultiFileAuthState(authDir);
+    state.keys = makeCacheableSignalKeyStore(state.keys, this.logger);
+
+    const { version } = await fetchLatestBaileysVersion();
+
+    // Resurrect-after-stop guard: if disconnect ran during the awaits above,
+    // bail out so we don't create a live socket for an intentionally-stopped session.
+    if (this.sessions.get(name)?.intentionalClose) {
+      return;
+    }
+
+    // Tear down any previous socket for this session before creating the new one.
+    const previous = this.sessions.get(name)?.socket;
+    if (previous) {
+      try {
+        previous.ev.removeAllListeners("connection.update");
+        previous.ev.removeAllListeners("creds.update");
+        previous.ev.removeAllListeners("messages.upsert");
+        previous.ev.removeAllListeners("contacts.upsert");
+        previous.ev.removeAllListeners("chats.upsert");
+        previous.ev.removeAllListeners("messaging-history.set");
+        previous.ev.removeAllListeners("lid-mapping.update");
+        previous.end(undefined);
+      } catch {
+        // end() may already have run from Baileys' own close handler.
+      }
+      this.sessions.setSocket(name, null);
+    }
+
+    // Create a per-session message store for the retry protocol.
+    const messageStore = createMessageStore(this.config.messageStoreCap);
+    this.messageStores.set(name, messageStore);
+
+    const sock = makeWASocket({
+      auth: state,
+      version,
+      browser: this.config.browser,
+      logger: this.logger,
+      printQRInTerminal: false,
+      markOnlineOnConnect: this.config.markOnlineOnConnect,
+      shouldSyncHistoryMessage: () => true,
+      syncFullHistory: false,
+      getMessage: async (key: any) => {
+        if (!key?.id) return undefined;
+        // Prefer adapter-backed store when available.
+        if (this.adapter) {
+          const stored = await this.adapter.getMessage(name, key.id);
+          if (stored) return stored.message as any;
+        }
+        const stored = messageStore.get(key.id);
+        return stored as any ?? undefined;
+      },
+    });
+
+    this.sessions.setSocket(name, sock);
+    this.sessions.setStatus(name, "initializing");
+
+    // ── Event wiring ──
+
+    sock.ev.on("connection.update", (update: Partial<ConnectionState>) => {
+      this.handleConnectionUpdate(name, update);
+    });
+
+    sock.ev.on("creds.update", () => {
+      void saveCreds();
+      if (this.adapter) {
+        const session = this.sessions.get(name);
+        if (session) {
+          void this.adapter.upsertSession({
+            name,
+            status: session.status,
+            phone: session.phone,
+            pushName: session.pushName,
+            updatedAt: Date.now(),
+          });
+        }
+      }
+    });
+
+    sock.ev.on("messages.upsert", (event: { messages: WAMessage[]; type: string }) => {
+      this.handleMessagesUpsert(name, event);
+    });
+
+    sock.ev.on("contacts.upsert", (contacts: any[]) => {
+      if (!this.adapter) return;
+      for (const contact of contacts) {
+        void this.adapter.upsertContact({
+          id: contact.id,
+          name: contact.name ?? null,
+          pushName: contact.notify ?? null,
+          number: contact.phoneNumber ?? contact.id?.split("@")[0] ?? null,
+          isMyContact: contact.isMyContact ?? false,
+          isBlocked: false,
+        });
+      }
+    });
+
+    sock.ev.on("chats.upsert", (chats: any[]) => {
+      if (!this.adapter) return;
+      for (const chat of chats) {
+        void this.adapter.upsertChat({
+          id: chat.id,
+          name: chat.name ?? null,
+          phoneJid: null,
+          unreadCount: chat.unreadCount ?? 0,
+          lastMessageTimestamp: chat.lastMessageTimestamp
+            ? Number(chat.lastMessageTimestamp)
+            : undefined,
+        });
+      }
+    });
+
+    sock.ev.on("messaging-history.set", (history: any) => {
+      const mappings = history.lidPnMappings ?? [];
+      for (const mapping of mappings) {
+        if (mapping.lid && mapping.pn) {
+          this.lidMap.set(mapping.lid, mapping.pn);
+          if (this.adapter) {
+            void this.adapter.upsertLidMapping(mapping.lid, mapping.pn);
+          }
+        }
+      }
+    });
+
+    sock.ev.on("lid-mapping.update", ({ lid, pn }: { lid?: string; pn?: string }) => {
+      if (lid && pn) {
+        this.lidMap.set(lid, pn);
+        if (this.adapter) {
+          void this.adapter.upsertLidMapping(lid, pn);
+        }
+      }
+    });
   }
 
   /**
@@ -109,11 +277,18 @@ export class WhatsAppEngine extends EventEmitter {
       return;
     }
 
-    this.sessions.clearReconnectTimer(name);
     this.sessions.markIntentionalClose(name);
+    this.sessions.clearReconnectTimer(name);
 
     if (session.socket) {
       try {
+        session.socket.ev.removeAllListeners("connection.update");
+        session.socket.ev.removeAllListeners("creds.update");
+        session.socket.ev.removeAllListeners("messages.upsert");
+        session.socket.ev.removeAllListeners("contacts.upsert");
+        session.socket.ev.removeAllListeners("chats.upsert");
+        session.socket.ev.removeAllListeners("messaging-history.set");
+        session.socket.ev.removeAllListeners("lid-mapping.update");
         session.socket.end(undefined);
       } catch {
         // ignore
@@ -121,6 +296,7 @@ export class WhatsAppEngine extends EventEmitter {
       this.sessions.setSocket(name, null);
     }
 
+    this.messageStores.delete(name);
     this.sessions.setStatus(name, "disconnected");
     this.emit("connection", {
       sessionName: name,
@@ -153,7 +329,17 @@ export class WhatsAppEngine extends EventEmitter {
     if (session.status === "connected") {
       throw new Error("Already authenticated");
     }
-    return session.socket.requestPairingCode(phoneNumber);
+
+    // Basic phone validation: must start with + and contain only digits/plus.
+    const phoneRegex = /^\+[1-9]\d{7,14}$/;
+    if (!phoneRegex.test(phoneNumber)) {
+      throw new Error("Invalid phone number format");
+    }
+
+    const code = await session.socket.requestPairingCode(phoneNumber);
+    this.sessions.setPairingCode(name, code);
+    this.emit("connection", { sessionName: name, status: "pairing_code", pairingCode: code });
+    return code;
   }
 
   /**
@@ -163,12 +349,34 @@ export class WhatsAppEngine extends EventEmitter {
    */
   async sendText(name: string, chatId: string, text: string): Promise<SendResult> {
     const session = this.sessions.get(name);
-    if (!session || session.status !== "connected") {
+    if (!session || session.status !== "connected" || !session.socket) {
       throw new Error("Session not connected");
     }
-    // TODO: implement in Phase 2
-    this.logger.warn({ session: name, chatId, text }, "sendText() not yet implemented");
-    throw new Error("sendText() not yet implemented");
+
+    const jid = resolveDeliverableJid(chatId, this.lidMap);
+
+    if (this.config.simulateTyping) {
+      await simulateTyping(text.length, this.config.simulateTypingMaxMs);
+    }
+
+    const sent = await session.socket.sendMessage(jid, { text });
+
+    // Store for retry protocol
+    if (sent?.key?.id) {
+      const store = this.messageStores.get(name);
+      if (store) {
+        store.set(sent.key.id, sent);
+      }
+      if (this.adapter) {
+        void this.adapter.putMessage(name, {
+          keyId: sent.key.id,
+          message: sent,
+          timestamp: Date.now(),
+        });
+      }
+    }
+
+    return normalizeSentResult(sent, jid);
   }
 
   /**
@@ -180,15 +388,60 @@ export class WhatsAppEngine extends EventEmitter {
   async sendMedia(
     name: string,
     chatId: string,
-    _media: MediaInput,
+    media: MediaInput,
   ): Promise<SendResult> {
     const session = this.sessions.get(name);
-    if (!session || session.status !== "connected") {
+    if (!session || session.status !== "connected" || !session.socket) {
       throw new Error("Session not connected");
     }
-    // TODO: implement in Phase 2
-    this.logger.warn({ session: name, chatId }, "sendMedia() not yet implemented");
-    throw new Error("sendMedia() not yet implemented");
+
+    // Validate size
+    const data = Buffer.isBuffer(media.data)
+      ? media.data
+      : Buffer.from(media.data, "base64");
+    if (data.length > this.config.mediaMaxSize) {
+      throw new Error("Media exceeds size cap");
+    }
+
+    const jid = resolveDeliverableJid(chatId, this.lidMap);
+
+    let content: Record<string, any>;
+    if (media.mimetype.startsWith("image/")) {
+      content = { image: data, mimetype: media.mimetype, caption: media.caption };
+    } else if (media.mimetype.startsWith("video/")) {
+      content = { video: data, mimetype: media.mimetype, caption: media.caption };
+    } else if (media.mimetype.startsWith("audio/")) {
+      content = { audio: data, mimetype: media.mimetype, ptt: media.ptt ?? false };
+    } else {
+      content = {
+        document: data,
+        mimetype: media.mimetype,
+        fileName: media.filename ?? "file",
+        caption: media.caption,
+      };
+    }
+
+    if (media.mentions?.length) {
+      content.mentions = media.mentions;
+    }
+
+    const sent = await session.socket.sendMessage(jid, content as any);
+
+    if (sent?.key?.id) {
+      const store = this.messageStores.get(name);
+      if (store) {
+        store.set(sent.key.id, sent);
+      }
+      if (this.adapter) {
+        void this.adapter.putMessage(name, {
+          keyId: sent.key.id,
+          message: sent,
+          timestamp: Date.now(),
+        });
+      }
+    }
+
+    return normalizeSentResult(sent, jid);
   }
 
   /**
@@ -202,12 +455,14 @@ export class WhatsAppEngine extends EventEmitter {
     state: ChatState,
   ): Promise<void> {
     const session = this.sessions.get(name);
-    if (!session || session.status !== "connected") {
+    if (!session || session.status !== "connected" || !session.socket) {
       throw new Error("Session not connected");
     }
-    // TODO: implement in Phase 2
-    this.logger.warn({ session: name, chatId, state }, "sendChatState() not yet implemented");
-    throw new Error("sendChatState() not yet implemented");
+
+    const jid = resolveDeliverableJid(chatId, this.lidMap);
+    const presence =
+      state === "typing" ? "composing" : state === "recording" ? "recording" : "paused";
+    await session.socket.sendPresenceUpdate(presence, jid);
   }
 
   /**
@@ -263,8 +518,121 @@ export class WhatsAppEngine extends EventEmitter {
 
   /* ─── Private ─── */
 
-  /**
-   * Store a message for the retry protocol. Uses a ring-buffer eviction
-   * when the in-memory cap is reached (fallback when no adapter is registered).
-   */
+  private handleConnectionUpdate(
+    name: string,
+    update: Partial<ConnectionState>,
+  ): void {
+    const { connection, lastDisconnect, qr } = update;
+
+    if (qr) {
+      this.sessions.setQR(name, qr);
+      this.emit("connection", { sessionName: name, status: "qr", qr });
+    }
+
+    if (connection === "connecting") {
+      this.sessions.setStatus(name, "connecting");
+      this.emit("connection", { sessionName: name, status: "connecting" });
+    }
+
+    if (connection === "open") {
+      const session = this.sessions.get(name);
+      const sock = session?.socket;
+      const phone = sock?.user?.id?.split(":")[0] ?? null;
+      const pushName = sock?.user?.name ?? null;
+
+      this.sessions.setQR(name, null);
+      this.sessions.resetReconnectAttempts(name);
+      this.sessions.setStatus(name, "connected");
+      this.sessions.setAccountInfo(name, phone, pushName);
+
+      this.emit("connection", {
+        sessionName: name,
+        status: "connected",
+        phone,
+        pushName,
+      });
+    }
+
+    if (connection === "close") {
+      const statusCode = (lastDisconnect?.error as any)?.output?.statusCode;
+      const terminal = isTerminalError(statusCode);
+
+      if (this.sessions.get(name)?.intentionalClose) {
+        this.sessions.clearIntentionalClose(name);
+        this.sessions.setSocket(name, null);
+        this.sessions.setStatus(name, "disconnected");
+        this.emit("connection", { sessionName: name, status: "disconnected" });
+        return;
+      }
+
+      if (terminal) {
+        this.sessions.setSocket(name, null);
+        this.sessions.setStatus(name, "logged_out");
+        this.emit("connection", { sessionName: name, status: "logged_out" });
+
+        if (statusCode === 401) {
+          const authDir = path.join(this.config.authDir, name);
+          try {
+            fs.rmSync(authDir, { recursive: true, force: true });
+          } catch {
+            // ignore
+          }
+        }
+
+        this.sessions.resetReconnectAttempts(name);
+        return;
+      }
+
+      // Transient disconnect — schedule reconnect with capped exponential backoff.
+      this.sessions.setStatus(name, "disconnected");
+      this.emit("connection", { sessionName: name, status: "disconnected" });
+
+      const attempts = this.sessions.incrementReconnectAttempts(name);
+      const delay = calculateBackoffDelay(attempts);
+
+      this.logger.warn(
+        { session: name, attempts, delayMs: delay, statusCode },
+        "transient disconnect; scheduling reconnect",
+      );
+
+      const timer = setTimeout(() => {
+        this.sessions.clearReconnectTimer(name);
+        this.connect(name).catch((err) => {
+          this.logger.warn({ session: name, err }, "reconnect attempt failed");
+        });
+      }, delay);
+
+      this.sessions.setReconnectTimer(name, timer);
+    }
+  }
+
+  private handleMessagesUpsert(
+    name: string,
+    event: { messages: WAMessage[]; type: string },
+  ): void {
+    for (const msg of event.messages) {
+      if (!msg.key?.remoteJid || !msg.key.id) continue;
+
+      // Capture remoteJidAlt LID→phone mapping when available.
+      const remoteJidAlt: string | undefined = (msg.key as any).remoteJidAlt;
+      if (msg.key.remoteJid.endsWith("@lid") && remoteJidAlt) {
+        this.lidMap.set(msg.key.remoteJid, remoteJidAlt);
+        if (this.adapter) {
+          void this.adapter.upsertLidMapping(msg.key.remoteJid, remoteJidAlt);
+        }
+      }
+
+      const normalized = normalizeIncomingMessage(msg, this.lidMap);
+
+      this.emit("message", { sessionName: name, message: normalized });
+
+      if (this.adapter) {
+        void this.adapter.putMessage(name, {
+          keyId: msg.key.id,
+          message: msg,
+          timestamp: normalized.timestamp,
+        });
+      }
+    }
+  }
 }

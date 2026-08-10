@@ -21,6 +21,8 @@ export interface WhatsAppEngineConfig {
   messageStoreCap?: number;
   /** Pino log level. Default: "warn". */
   logLevel?: string;
+  /** Maximum media upload size in bytes. Default: 50 MB. */
+  mediaMaxSize?: number;
 }
 
 export type ChatState = "typing" | "recording" | "paused";
