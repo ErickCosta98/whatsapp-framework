@@ -56,10 +56,29 @@ describe("lid/resolver", () => {
 
   describe("resolveDeliverableJid", () => {
     it("resolves a mapped LID to phone@c.us", () => {
+      // Real-world lidMap values come from Baileys with @s.whatsapp.net suffix
       const lid = `lid123${LID_SUFFIX}`;
-      const map = new Map([[lid, "5551234"]]);
+      const map = new Map([[lid, `5551234${RAW_PHONE_SUFFIX}`]]);
       expect(resolveDeliverableJid(lid, map)).toBe(
         `5551234${NEUTRAL_PHONE_SUFFIX}`,
+      );
+    });
+
+    it("normalizes a mapping value that already has a raw suffix", () => {
+      // Real-world: messaging-history.set and lid-mapping.update
+      // store phone JIDs with @s.whatsapp.net, not plain numbers.
+      const lid = `27183552696364${LID_SUFFIX}`;
+      const map = new Map([[lid, `5215563281307${RAW_PHONE_SUFFIX}`]]);
+      expect(resolveDeliverableJid(lid, map)).toBe(
+        `5215563281307${NEUTRAL_PHONE_SUFFIX}`,
+      );
+    });
+
+    it("preserves a mapping value that is already neutral", () => {
+      const lid = `27183552696364${LID_SUFFIX}`;
+      const map = new Map([[lid, `5215563281307${NEUTRAL_PHONE_SUFFIX}`]]);
+      expect(resolveDeliverableJid(lid, map)).toBe(
+        `5215563281307${NEUTRAL_PHONE_SUFFIX}`,
       );
     });
 

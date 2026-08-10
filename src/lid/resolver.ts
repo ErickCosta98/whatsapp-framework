@@ -64,7 +64,7 @@ export function resolveDeliverableJid(
   if (isLidJid(jid)) {
     const phone = lidMap.get(jid);
     if (phone) {
-      return phone + NEUTRAL_PHONE_SUFFIX;
+      return normalizeJid(phone);
     }
     return jid;
   }
