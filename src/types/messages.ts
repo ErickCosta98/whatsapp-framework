@@ -21,6 +21,7 @@ export type MessageType =
   | "location"
   | "contact"
   | "poll"
+  | "reaction"
   | "revoked"
   | "ephemeral"
   | "unknown";

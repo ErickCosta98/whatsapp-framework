@@ -17,3 +17,8 @@
 export { WhatsAppEngine } from "./engine.js";
 export { SessionManager } from "./session.js";
 export * from "./types/index.js";
+export * from "./anti-ban/typing.js";
+export * from "./anti-ban/throttling.js";
+export * from "./lid/resolver.js";
+export * from "./retry/store.js";
+export * from "./normalizer.js";
