@@ -2,7 +2,7 @@
 
 ## What this project is
 
-`@gentle/whatsapp-framework` is a private TypeScript npm package that wraps Baileys ^7.0.0-rc13 into a reusable WhatsApp framework for multi-session chatbots. It eliminates duplicated patterns across 3 projects (repartia, senda-bot, OpenWA) by standardizing connection management, message normalization, anti-ban protections, and database persistence.
+`@erickcosta98/whatsapp-framework` is a private TypeScript npm package that wraps Baileys ^7.0.0-rc13 into a reusable WhatsApp framework for multi-session chatbots. It eliminates duplicated patterns across 3 projects (repartia, senda-bot, OpenWA) by standardizing connection management, message normalization, anti-ban protections, and database persistence.
 
 ## Architecture
 

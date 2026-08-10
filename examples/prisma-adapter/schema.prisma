@@ -1,0 +1,48 @@
+// Add these models to your existing Prisma schema.
+// They live alongside your business models — the framework uses them
+// for internal state (auth, LID mappings, retry protocol).
+
+model WaAuthState {
+  sessionName String   @id @map("session_name")
+  data        Json
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@map("wa_auth_state")
+}
+
+model WaLidMapping {
+  lid   String @id
+  phone String
+
+  @@map("wa_lid_mappings")
+}
+
+model WaMessageStore {
+  keyId     String   @id @map("key_id")
+  message   Json
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("wa_message_store")
+}
+
+model WaContact {
+  id          String  @id
+  name        String?
+  pushName    String? @map("push_name")
+  number      String?
+  isMyContact Boolean @default(false) @map("is_my_contact")
+  isBlocked   Boolean @default(false) @map("is_blocked")
+
+  @@map("wa_contacts")
+}
+
+model WaChat {
+  jid                  String  @id
+  name                 String?
+  phoneJid             String? @map("phone_jid")
+  unreadCount          Int     @default(0) @map("unread_count")
+  lastMessageTimestamp BigInt? @map("last_message_timestamp")
+
+  @@map("wa_chats")
+}

@@ -1,6 +1,6 @@
-# Migrating from raw Baileys to @gentle/whatsapp-framework
+# Migrating from raw Baileys to @erickcosta98/whatsapp-framework
 
-This guide covers the migration from raw `@whiskeysockets/baileys` usage to the `@gentle/whatsapp-framework` wrapper. Written for projects like repartia and senda-bot that currently use Baileys directly.
+This guide covers the migration from raw `@whiskeysockets/baileys` usage to the `@erickcosta98/whatsapp-framework` wrapper. Written for projects like repartia and senda-bot that currently use Baileys directly.
 
 ## What the framework replaces
 
@@ -59,7 +59,7 @@ sock.ev.on("messages.upsert", handleMessages);
 **After** (framework):
 
 ```ts
-import { WhatsAppEngine, SQLiteAdapter } from "@gentle/whatsapp-framework";
+import { WhatsAppEngine, SQLiteAdapter } from "@erickcosta98/whatsapp-framework";
 
 const engine = new WhatsAppEngine({
   authDir: "./auth",
@@ -234,7 +234,7 @@ for (const recipient of recipients) {
 **After** (framework):
 
 ```ts
-import { createThrottle } from "@gentle/whatsapp-framework";
+import { createThrottle } from "@erickcosta98/whatsapp-framework";
 
 const throttle = createThrottle(3000, 2000);
 

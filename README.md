@@ -1,15 +1,15 @@
-# @gentle/whatsapp-framework
+# @erickcosta98/whatsapp-framework
 
 TypeScript WhatsApp framework built on Baileys ^7.0.0-rc13. Multi-session, anti-ban protections, database abstraction, message normalization. Drop-in replacement for raw Baileys in production bots.
 
 ## Quick Start
 
 ```bash
-npm install @gentle/whatsapp-framework better-sqlite3
+npm install github:ErickCosta98/whatsapp-framework#master
 ```
 
 ```ts
-import { WhatsAppEngine, SQLiteAdapter } from "@gentle/whatsapp-framework";
+import { WhatsAppEngine, SQLiteAdapter } from "@erickcosta98/whatsapp-framework";
 
 const engine = new WhatsAppEngine({ authDir: "./auth" });
 const adapter = new SQLiteAdapter({ filePath: "./data.db" });
@@ -293,7 +293,7 @@ Three adapters implement the `IDatabaseAdapter` interface. All share the same sc
 ### SQLite
 
 ```ts
-import { SQLiteAdapter } from "@gentle/whatsapp-framework";
+import { SQLiteAdapter } from "@erickcosta98/whatsapp-framework";
 
 const adapter = new SQLiteAdapter({ filePath: "./data.db" });
 await adapter.initialize();
@@ -305,7 +305,7 @@ Uses `better-sqlite3`. Synchronous under the hood, but the adapter wraps calls i
 ### MySQL
 
 ```ts
-import { MySQLAdapter } from "@gentle/whatsapp-framework/mysql";
+import { MySQLAdapter } from "@erickcosta98/whatsapp-framework/mysql";
 
 const adapter = new MySQLAdapter({
   host: "localhost",
@@ -322,7 +322,7 @@ Uses `mysql2/promise`. Install: `npm install mysql2`.
 ### PostgreSQL
 
 ```ts
-import { PostgresAdapter } from "@gentle/whatsapp-framework/postgres";
+import { PostgresAdapter } from "@erickcosta98/whatsapp-framework/postgres";
 
 const adapter = new PostgresAdapter({
   host: "localhost",
@@ -341,7 +341,7 @@ Uses `pg`. Install: `npm install pg`.
 Implement the `IDatabaseAdapter` interface:
 
 ```ts
-import type { IDatabaseAdapter, SessionRecord, StoredMessage } from "@gentle/whatsapp-framework";
+import type { IDatabaseAdapter, SessionRecord, StoredMessage } from "@erickcosta98/whatsapp-framework";
 
 class MyAdapter implements IDatabaseAdapter {
   async getSession(name: string): Promise<SessionRecord | null> { /* ... */ }
@@ -359,6 +359,26 @@ class MyAdapter implements IDatabaseAdapter {
 }
 ```
 
+### Prisma (PostgreSQL / MySQL)
+
+If your project already uses Prisma, create a `PrismaAdapter` instead of using the raw driver adapters. A complete reference implementation is in [`examples/prisma-adapter/`](examples/prisma-adapter/).
+
+**What you need:**
+
+1. Add 5 tables to your Prisma schema (`wa_auth_state`, `wa_lid_mappings`, `wa_message_store`, `wa_contacts`, `wa_chats`)
+2. Implement the `IDatabaseAdapter` interface using your Prisma client
+3. Register it: `engine.registerAdapter(new PrismaAdapter())`
+
+```ts
+import { PrismaAdapter } from "./prismaAdapter.js";
+import { WhatsAppEngine } from "@erickcosta98/whatsapp-framework";
+
+const engine = new WhatsAppEngine({ authDir: "./auth" });
+await engine.registerAdapter(new PrismaAdapter());
+```
+
+These tables are **separate** from your business data — the framework uses them for internal state (auth, LID mappings, retry protocol). Your existing Prisma models stay untouched.
+
 ## Anti-Ban Protections
 
 ### Simulated Typing
@@ -368,7 +388,7 @@ When `simulateTyping` is `true` (default), the engine pauses before sending text
 **Formula**: `500ms + text.length * 45ms`, capped at `simulateTypingMaxMs`, with ±15% random jitter.
 
 ```ts
-import { simulateTyping, simulateTypingDelay } from "@gentle/whatsapp-framework";
+import { simulateTyping, simulateTypingDelay } from "@erickcosta98/whatsapp-framework";
 
 // Async — actually sleeps
 await simulateTyping(message.length);
@@ -382,7 +402,7 @@ const ms = simulateTypingDelay(message.length);
 For sending messages in bulk, use the throttle utility to avoid rate limits.
 
 ```ts
-import { createThrottle } from "@gentle/whatsapp-framework";
+import { createThrottle } from "@erickcosta98/whatsapp-framework";
 
 const throttle = createThrottle(3000, 2000); // baseDelay, jitterMax
 
@@ -408,7 +428,7 @@ The framework normalizes all JIDs to the neutral `@c.us` dialect and maintains a
 3. Otherwise → normalizes to `@c.us`
 
 ```ts
-import { normalizeJid, isLidJid, resolveDeliverableJid } from "@gentle/whatsapp-framework";
+import { normalizeJid, isLidJid, resolveDeliverableJid } from "@erickcosta98/whatsapp-framework";
 
 normalizeJid("5215551234567@s.whatsapp.net"); // => "5215551234567@c.us"
 isLidJid("abc123@lid");                       // => true
@@ -424,7 +444,7 @@ Every inbound Baileys `WAMessage` goes through a normalization pipeline:
 4. **Build** a `NormalizedMessage` with clean, predictable fields
 
 ```ts
-import { normalizeIncomingMessage, detectMessageType } from "@gentle/whatsapp-framework";
+import { normalizeIncomingMessage, detectMessageType } from "@erickcosta98/whatsapp-framework";
 
 const normalized = normalizeIncomingMessage(rawBaileysMessage, lidMap);
 ```
@@ -479,7 +499,7 @@ Each session has:
 
 ## Exports Summary
 
-### Main entry (`@gentle/whatsapp-framework`)
+### Main entry (`@erickcosta98/whatsapp-framework`)
 
 | Export | Kind | Description |
 |--------|------|-------------|
@@ -501,8 +521,8 @@ Each session has:
 
 | Import path | Export |
 |-------------|--------|
-| `@gentle/whatsapp-framework/mysql` | `MySQLAdapter` |
-| `@gentle/whatsapp-framework/postgres` | `PostgresAdapter` |
+| `@erickcosta98/whatsapp-framework/mysql` | `MySQLAdapter` |
+| `@erickcosta98/whatsapp-framework/postgres` | `PostgresAdapter` |
 
 All types are re-exported from the main entry.
 

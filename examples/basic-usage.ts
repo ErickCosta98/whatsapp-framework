@@ -8,7 +8,7 @@
  * Run: npx tsx examples/basic-usage.ts
  */
 
-import { WhatsAppEngine, SQLiteAdapter, createThrottle } from "@gentle/whatsapp-framework";
+import { WhatsAppEngine, SQLiteAdapter, createThrottle } from "@erickcosta98/whatsapp-framework";
 
 // ─── 1. Setup ──────────────────────────────────────────────────────────
 
