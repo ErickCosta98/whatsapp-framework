@@ -4,17 +4,20 @@
 
 `@erickcosta98/whatsapp-framework` is a private TypeScript npm package that wraps Baileys ^7.0.0-rc13 into a reusable WhatsApp framework for multi-session chatbots. It eliminates duplicated patterns across 3 projects (repartia, senda-bot, OpenWA) by standardizing connection management, message normalization, anti-ban protections, and database persistence.
 
+**Multi-platform**: since `messenger-multi-platform`, the framework also supports Facebook Messenger via `@neoaz07/nkxfca` through a parallel `MessengerEngine` and a `createEngine` factory. WhatsAppEngine remains untouched. Messenger supports **personal accounts only** — Facebook Page accounts are out of scope (nkxfca MQTT delivers no real-time events for pages; future workstream planned with the official Meta Graph API).
+
 ## Architecture
 
 ```
 src/
 ├── index.ts              # Public API barrel export
+├── factory.ts            # createEngine("whatsapp" | "messenger", config) factory
 ├── engine.ts             # WhatsAppEngine — core class (connect, disconnect, sendText, sendMedia, sendChatState, requestPairingCode, events)
 ├── session.ts            # SessionManager — in-memory Map<string, SessionInfo> tracking socket, status, QR, reconnect state
 ├── normalizer.ts         # Baileys WAMessage → NormalizedMessage pipeline (unwrap view-once, detect type, resolve JIDs)
 ├── types/
 │   ├── index.ts          # Barrel re-export
-│   ├── config.ts         # WhatsAppEngineConfig interface, ChatState type
+│   ├── config.ts         # WhatsAppEngineConfig + MessengerEngineConfig interfaces, ChatState type
 │   ├── messages.ts       # NormalizedMessage, IncomingMessage, SendResult, MediaInput, MessageType, MediaPayload, etc.
 │   ├── events.ts         # ConnectionEvent, MessageEvent, EngineEventMap, ConnectionStatus
 │   └── adapter.ts        # IDatabaseAdapter interface, SessionRecord, StoredMessage, ContactRecord, ChatRecord
@@ -22,6 +25,12 @@ src/
 │   ├── sqlite.ts         # SQLiteAdapter — better-sqlite3, synchronous under the hood, wrapped in Promise.resolve()
 │   ├── mysql.ts          # MySQLAdapter — mysql2/promise connection pool
 │   └── postgres.ts       # PostgresAdapter — pg Pool
+├── messenger/
+│   ├── engine.ts         # MessengerEngine — core class mirroring WhatsAppEngine public API
+│   ├── client-loader.ts  # CJS createRequire loader for @neoaz07/nkxfca with peer-dep guard
+│   ├── normalizer.ts     # nkxfca Message → NormalizedMessage mapping
+│   ├── media-converter.ts# Buffer → PassThrough → ReadStream for Messenger attachments
+│   └── index.ts          # Barrel export for @erickcosta98/whatsapp-framework/messenger sub-path
 ├── anti-ban/
 │   ├── typing.ts         # simulateTyping(delay) — 500ms + len*45ms capped ±15% jitter
 │   └── throttling.ts     # createThrottle(baseDelay, jitterMax) — enforces delays between consecutive calls
@@ -33,9 +42,13 @@ src/
     └── store.ts          # createMessageStore(maxSize) — ring-buffer Map for Baileys retry protocol
 ```
 
-**Data flow**: `Baileys socket` → `messages.upsert` → `handleMessagesUpsert` → `normalizeIncomingMessage` → `emit("message", MessageEvent)` → user handler.
+**WhatsApp data flow**: `Baileys socket` → `messages.upsert` → `handleMessagesUpsert` → `normalizeIncomingMessage` → `emit("message", MessageEvent)` → user handler.
 
-**Connection flow**: `connect(name)` → `useMultiFileAuthState(authDir/name)` → `makeWASocket({...})` → wire `connection.update` → `handleConnectionUpdate` → emit `"connection"` events.
+**WhatsApp connection flow**: `connect(name)` → `useMultiFileAuthState(authDir/name)` → `makeWASocket({...})` → wire `connection.update` → `handleConnectionUpdate` → emit `"connection"` events.
+
+**Messenger data flow**: `listenMqtt` callback → `normalizeMessengerMessage` → `emit("message", MessageEvent)` → user handler.
+
+**Messenger connection flow**: `connect(name)` → load adapter session → decrypt `appState` → `nkxfca.login(credentials)` → store API → `listenMqtt` → emit `"connection"` events.
 
 ## Public API
 
@@ -61,6 +74,42 @@ class WhatsAppEngine extends EventEmitter {
   once<K extends keyof EngineEventMap>(event: K, listener: (...args: EngineEventMap[K]) => void): this
 }
 ```
+
+### MessengerEngine
+
+```ts
+class MessengerEngine extends EventEmitter {
+  constructor(config: MessengerEngineConfig)
+  registerAdapter(adapter: IDatabaseAdapter): void
+  hasAdapter(): boolean
+  connect(name: string, appState?: string): Promise<void>
+  disconnect(name: string): Promise<void>
+  stop(): Promise<void>
+  sendText(name: string, chatId: string, text: string): Promise<SendResult>
+  sendMedia(name: string, chatId: string, media: MediaInput): Promise<SendResult>
+  sendChatState(name: string, chatId: string, state: ChatState): Promise<void>
+  getStatus(name: string): string | undefined
+  getQR(name: string): string | null          // always null
+  getPairingCode(name: string): string | null // always null
+  requestPairingCode(name: string, phoneNumber: string): Promise<string> // always rejects
+  listSessions(): string[]
+  on<K extends keyof EngineEventMap>(event: K, listener: (...args: EngineEventMap[K]) => void): this
+  once<K extends keyof EngineEventMap>(event: K, listener: (...args: EngineEventMap[K]) => void): this
+}
+```
+
+### createEngine factory
+
+```ts
+type Platform = "whatsapp" | "messenger";
+
+export function createEngine(platform: "whatsapp", config: WhatsAppEngineConfig): WhatsAppEngine;
+export function createEngine(platform: "messenger", config: MessengerEngineConfig): MessengerEngine;
+export function createEngine(platform: Platform, config: any): WhatsAppEngine | MessengerEngine;
+```
+
+- Throws `"Unsupported platform: <platform>"` for unknown platforms.
+- Throws `"Missing optional peer dependency @neoaz07/nkxfca..."` when creating a Messenger engine without nkxfca installed.
 
 ### SessionManager
 
@@ -118,13 +167,20 @@ createMessageStore(maxSize?: number): MessageStore
 calculateBackoffDelay(attempts: number): number
 isTerminalError(statusCode: number | undefined): boolean
 classifyDisconnect(statusCode: number | undefined): "terminal" | "transient" | "unknown"
+
+// messenger/normalizer.ts
+normalizeMessengerMessage(msg: any, currentUserID: string): IncomingMessage
+
+// messenger/media-converter.ts
+bufferToReadStream(buffer: Buffer, mimetype: string): { stream: ReadStream; filename: string }
 ```
 
 ### Types
 
 ```ts
 // config.ts
-WhatsAppEngineConfig { authDir, browser?, markOnlineOnConnect?, simulateTyping?, simulateTypingMaxMs?, delayBetweenMessages?, randomizeDelay?, messageStoreCap?, logLevel?, mediaMaxSize? }
+WhatsAppEngineConfig { authDir, browser?, markOnlineOnConnect?, simulateTyping?, simulateTypingMaxMs?, delayBetweenMessages?, randomizeDelay?, messageStoreCap?, logLevel?, mediaMaxSize?, syncFullHistory? }
+MessengerEngineConfig { appState?, email?, password?, logLevel?, mediaMaxSize?, encryptAppState?, decryptAppState? }
 ChatState = "typing" | "recording" | "paused"
 
 // messages.ts
@@ -145,7 +201,7 @@ EngineEventMap { connection: [ConnectionEvent]; message: [MessageEvent]; "messag
 
 // adapter.ts
 IDatabaseAdapter { getSession, upsertSession, deleteSession, getMessage, putMessage, clearSessionMessages, getLidMapping, upsertLidMapping, listContacts, upsertContact, listChats, upsertChat }
-SessionRecord { name, status, phone?, pushName?, createdAt?, updatedAt? }
+SessionRecord { name, status, platform?: "whatsapp" | "messenger", appState?: string | null, phone?, pushName?, createdAt?, updatedAt? }
 StoredMessage { keyId, message, timestamp? }
 ContactRecord { id, name?, pushName?, number?, isMyContact?, isBlocked? }
 ChatRecord { id, name?, phoneJid?, unreadCount?, lastMessageTimestamp? }
@@ -153,7 +209,7 @@ ChatRecord { id, name?, phoneJid?, unreadCount?, lastMessageTimestamp? }
 
 ## Patterns
 
-### Standard setup
+### Standard WhatsApp setup
 
 ```ts
 const engine = new WhatsAppEngine({ authDir: "./auth" });
@@ -166,6 +222,40 @@ engine.on("message", handleMessage);
 
 await engine.connect("main");
 ```
+
+### Standard Messenger setup
+
+```ts
+import { createEngine, SQLiteAdapter } from "@erickcosta98/whatsapp-framework";
+
+const engine = createEngine("messenger", { appState: process.env.APPSTATE_JSON });
+const adapter = new SQLiteAdapter({ filePath: "./data.db" });
+await adapter.initialize();
+engine.registerAdapter(adapter);
+
+engine.on("connection", ({ sessionName, status }) => {
+  console.log(`[${sessionName}] ${status}`);
+});
+
+engine.on("message", ({ sessionName, message }) => {
+  if (message.fromMe) return;
+  console.log(`[${sessionName}] ${message.from}: ${message.body}`);
+});
+
+await engine.connect("bot-1");
+```
+
+### Messenger with encrypted appState
+
+```ts
+const engine = createEngine("messenger", {
+  appState: process.env.APPSTATE_JSON,
+  encryptAppState: (plain) => encrypt(plain, key),
+  decryptAppState: (cipher) => decrypt(cipher, key),
+});
+```
+
+The adapter persists the encrypted `appState` so the bot can reconnect after restart without re-authenticating.
 
 ### Message handler pattern
 
@@ -234,6 +324,18 @@ for (const recipient of recipients) {
 12. **Messages stored in the retry ring buffer are lost on process restart**. The SQLite/MySQL/Postgres adapter persists them to disk — use an adapter for production.
 
 13. **The `message` field in `StoredMessage` is stored as JSON**. When retrieving via a database adapter, the field is `JSON.parse()`'d. The raw Baileys `WAMessage` protobuf shape is preserved for retry compatibility.
+
+14. **Messenger `appState` requires real Facebook cookies**. The login flow uses `nkxfca` which needs a valid `appState` array from an authenticated Facebook session. See the `nkxfca` README for extraction instructions.
+
+15. **Messenger has no QR or pairing code flow**. `getQR()`, `getPairingCode()`, and `requestPairingCode()` return `null` or reject for Messenger sessions.
+
+16. **Messenger `message:ack` is synthetic**. nkxfca does not expose delivery receipts, so the engine emits `"delivered"` immediately after `sendText`/`sendMedia` resolves. Do not rely on it for actual delivery confirmation.
+
+17. **Messenger does not support `message:reaction`**. Reaction events are silently ignored for Messenger sessions.
+
+18. **Messenger `sendChatState("recording")` throws**. Only `"typing"` and `"paused"` are supported.
+
+19. **Messenger anti-ban helpers are disabled**. `simulateTyping` and `createThrottle` are never invoked by `MessengerEngine`. Apply throttling in user code if needed.
 
 ## Testing
 

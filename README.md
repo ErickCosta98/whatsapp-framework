@@ -1,8 +1,16 @@
 # @erickcosta98/whatsapp-framework
 
-TypeScript WhatsApp framework built on Baileys ^7.0.0-rc13. Multi-session, anti-ban protections, database abstraction, message normalization. Drop-in replacement for raw Baileys in production bots.
+TypeScript WhatsApp framework built on Baileys ^7.0.0-rc13. Multi-session, anti-ban protections, database abstraction, message normalization. Now also supports Facebook Messenger via `@neoaz07/nkxfca`. Drop-in replacement for raw Baileys in production bots.
 
-## Quick Start
+## Requirements
+
+- **Node.js** >= 22.0.0
+- **better-sqlite3** ^11.0.0 (optional — only for SQLite adapter)
+- **mysql2** ^3.0.0 (optional — only for MySQL adapter)
+- **pg** ^8.0.0 (optional — only for PostgreSQL adapter)
+- **@neoaz07/nkxfca** ^1.0.10 (optional — only for Messenger support)
+
+## Quick Start — WhatsApp
 
 ```bash
 npm install github:ErickCosta98/whatsapp-framework#master
@@ -37,9 +45,57 @@ await engine.sendText("bot-1", "5215551234567@c.us", "Hello from the framework!"
 await engine.stop();
 ```
 
+## Quick Start — Messenger
+
+Install the optional peer dependency:
+
+```bash
+npm install @neoaz07/nkxfca@1.0.10
+```
+
+```ts
+import { createEngine, SQLiteAdapter } from "@erickcosta98/whatsapp-framework";
+
+const engine = createEngine("messenger", { appState: process.env.APPSTATE_JSON });
+const adapter = new SQLiteAdapter({ filePath: "./data.db" });
+
+await adapter.initialize();
+engine.registerAdapter(adapter);
+
+engine.on("connection", ({ sessionName, status }) => {
+  console.log(`[${sessionName}] ${status}`);
+});
+
+engine.on("message", ({ sessionName, message }) => {
+  if (message.fromMe) return;
+  console.log(`[${sessionName}] ${message.from}: ${message.body}`);
+});
+
+await engine.connect("bot-1");
+```
+
+**Security note**: `appState` contains real Facebook session cookies. Encrypt it before persistence and decrypt on load:
+
+```ts
+const engine = createEngine("messenger", {
+  appState: process.env.APPSTATE_JSON,
+  encryptAppState: (plain) => encrypt(plain, key),
+  decryptAppState: (cipher) => decrypt(cipher, key),
+});
+```
+
+The adapter stores the encrypted value so the bot can reconnect after restart without re-authenticating.
+
+**Platform-specific gaps**:
+- **No QR / pairing code flow** — `getQR()`, `getPairingCode()`, and `requestPairingCode()` return `null` or reject.
+- **Synthetic delivery acks** — `message:ack` emits `"delivered"` immediately after `sendText`/`sendMedia` resolves. Do not rely on it for actual delivery confirmation.
+- **No reaction events** — `message:reaction` is never emitted for Messenger sessions.
+- **Chat state limitation** — `sendChatState("recording")` throws; only `"typing"` and `"paused"` are supported.
+- **Personal accounts only** — the Messenger engine authenticates **personal** Facebook accounts via `@neoaz07/nkxfca`. **Facebook Page accounts are not supported** (nkxfca connects to MQTT for pages but never delivers real-time events). For page bots, a future workstream will use the official Meta Graph API (webhook + Page Access Token).
+
 ## Configuration
 
-`new WhatsAppEngine(config)` — all options:
+### `new WhatsAppEngine(config)` — all options:
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
@@ -53,6 +109,18 @@ await engine.stop();
 | `messageStoreCap` | `number` | `5000` | Max messages stored per session for retry protocol. |
 | `logLevel` | `string` | `"warn"` | Pino log level (`"fatal"`, `"error"`, `"warn"`, `"info"`, `"debug"`, `"trace"`). |
 | `mediaMaxSize` | `number` | `52428800` (50 MB) | Maximum media upload size in bytes. |
+
+### `new MessengerEngine(config)` — all options:
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `appState` | `string` | — | Encrypted or raw Facebook `appState` JSON string. |
+| `email` | `string` | — | Facebook email (alternative to `appState`). |
+| `password` | `string` | — | Facebook password (required with `email`). |
+| `logLevel` | `string` | `"warn"` | Pino log level. |
+| `mediaMaxSize` | `number` | `52428800` (50 MB) | Maximum media upload size in bytes. |
+| `encryptAppState` | `(plain: string) => string` | identity | Hook to encrypt appState before adapter persistence. |
+| `decryptAppState` | `(cipher: string) => string` | identity | Hook to decrypt appState after adapter read. |
 
 ## API Reference
 
@@ -104,6 +172,7 @@ console.log("Enter this code on your phone:", code);
 
 - **Throws** if the session is not initialized or already authenticated.
 - **Throws** if the phone number format is invalid (must match `/^\+[1-9]\d{7,14}$/`).
+- **Not supported** for Messenger (always rejects).
 
 ### `engine.sendText(name: string, chatId: string, text: string): Promise<SendResult>`
 
@@ -115,7 +184,7 @@ const result = await engine.sendText("bot-1", "5215551234567@c.us", "Hello!");
 ```
 
 - **Throws** if the session is not connected.
-- Respects `simulateTyping` config — if enabled, waits before sending.
+- On WhatsApp, respects `simulateTyping` config — if enabled, waits before sending.
 
 ### `engine.sendMedia(name: string, chatId: string, media: MediaInput): Promise<SendResult>`
 
@@ -157,6 +226,8 @@ await engine.sendChatState("bot-1", "5215551234567@c.us", "paused");
 
 `ChatState`: `"typing"` | `"recording"` | `"paused"`
 
+- Messenger only supports `"typing"` and `"paused"`; `"recording"` throws.
+
 ### `engine.getStatus(name: string): string | undefined`
 
 Get the current connection status of a session.
@@ -174,6 +245,8 @@ Get the current QR code data URL for a session, or `null` if none.
 const qr = engine.getQR("bot-1");
 ```
 
+- Always `null` for Messenger.
+
 ### `engine.getPairingCode(name: string): string | null`
 
 Get the current pairing code for a session, or `null` if none.
@@ -182,6 +255,8 @@ Get the current pairing code for a session, or `null` if none.
 const code = engine.getPairingCode("bot-1");
 ```
 
+- Always `null` for Messenger.
+
 ### `engine.listSessions(): string[]`
 
 Return all managed session names.
@@ -189,6 +264,20 @@ Return all managed session names.
 ```ts
 const names = engine.listSessions(); // => ["bot-1", "bot-2"]
 ```
+
+### `createEngine(platform, config)`
+
+Factory that returns the correct engine for the platform:
+
+```ts
+import { createEngine } from "@erickcosta98/whatsapp-framework";
+
+const wa = createEngine("whatsapp", { authDir: "./auth" });
+const ms = createEngine("messenger", { appState: "..." });
+```
+
+- Throws `"Unsupported platform: <platform>"` for unknown platforms.
+- Throws `"Missing optional peer dependency @neoaz07/nkxfca..."` when creating a Messenger engine without nkxfca installed.
 
 ## Events
 
@@ -203,6 +292,12 @@ The engine is an `EventEmitter`. All events are strongly typed.
 | `message:revoked` | `{ id, revokedId?, chatId, from, to, timestamp }` | Message remotely deleted. |
 | `message:reaction` | `{ messageId, chatId, reaction, senderId }` | Reaction added to a message. |
 | `error` | `{ sessionName: string, error: Error }` | Session-level error. |
+
+### Messenger event notes
+
+- `message:ack` is **synthetic** — emitted immediately after a successful `sendText`/`sendMedia` with status `"delivered"`. Do not rely on it for actual delivery confirmation.
+- `message:reaction` is **never emitted** for Messenger sessions.
+- `connection` statuses for Messenger are: `initializing`, `connecting`, `connected`, `disconnected`, `failed`.
 
 ### ConnectionEvent
 
@@ -516,6 +611,10 @@ Each session has:
 | `normalizeSentResult` | fn | Send result normalization |
 | `detectMessageType` | fn | Message type detection |
 | `createMessageStore` | fn | Message store factory |
+| `MessengerEngine` | class | Messenger engine class |
+| `createEngine` | fn | Platform-selecting factory |
+| `normalizeMessengerMessage` | fn | Messenger message normalizer |
+| `bufferToReadStream` | fn | Buffer → ReadStream for Messenger |
 
 ### Sub-path exports
 
@@ -523,12 +622,6 @@ Each session has:
 |-------------|--------|
 | `@erickcosta98/whatsapp-framework/mysql` | `MySQLAdapter` |
 | `@erickcosta98/whatsapp-framework/postgres` | `PostgresAdapter` |
+| `@erickcosta98/whatsapp-framework/messenger` | `MessengerEngine`, `createEngine`, `normalizeMessengerMessage`, `bufferToReadStream` |
 
 All types are re-exported from the main entry.
-
-## Requirements
-
-- **Node.js** >= 20.0.0
-- **better-sqlite3** ^11.0.0 (optional — only for SQLite adapter)
-- **mysql2** ^3.0.0 (optional — only for MySQL adapter)
-- **pg** ^8.0.0 (optional — only for PostgreSQL adapter)
