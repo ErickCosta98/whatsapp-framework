@@ -36,7 +36,7 @@ export async function loadMessengerClient(): Promise<{
     credentials: MessengerLoginCredentials,
     options?: MessengerLoginOptions | any,
     callback?: any,
-  ) => Promise<MessengerAPI> | void;
+  ) => Promise<MessengerAPI | void>;
 }> {
   try {
     const require = createRequire(import.meta.url);

@@ -49,6 +49,8 @@ export class PostgresAdapter {
         unread_count INT DEFAULT 0,
         last_message_timestamp BIGINT
       )`,
+            `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS platform TEXT DEFAULT 'whatsapp'`,
+            `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS app_state TEXT`,
         ];
         for (const sql of ddl) {
             await this.pool.query(sql);
@@ -57,6 +59,7 @@ export class PostgresAdapter {
     /* ─── Session store ─── */
     async getSession(name) {
         const result = await this.pool.query(`SELECT name, status, phone, push_name AS "pushName",
+              platform, app_state AS "appState",
               created_at AS "createdAt", updated_at AS "updatedAt"
        FROM sessions WHERE name = $1`, [name]);
         if (result.rows.length === 0)
@@ -65,6 +68,8 @@ export class PostgresAdapter {
         return {
             name: r.name,
             status: r.status,
+            platform: (r.platform ?? "whatsapp"),
+            appState: r.appState ?? null,
             phone: r.phone ?? null,
             pushName: r.pushName ?? null,
             createdAt: r.createdAt ?? undefined,
@@ -73,17 +78,21 @@ export class PostgresAdapter {
     }
     async upsertSession(record) {
         const now = Date.now();
-        await this.pool.query(`INSERT INTO sessions (name, status, phone, push_name, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6)
+        await this.pool.query(`INSERT INTO sessions (name, status, phone, push_name, platform, app_state, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        ON CONFLICT (name) DO UPDATE SET
          status = EXCLUDED.status,
          phone = EXCLUDED.phone,
          push_name = EXCLUDED.push_name,
+         platform = EXCLUDED.platform,
+         app_state = EXCLUDED.app_state,
          updated_at = EXCLUDED.updated_at`, [
             record.name,
             record.status,
             record.phone ?? null,
             record.pushName ?? null,
+            record.platform ?? "whatsapp",
+            record.appState ?? null,
             record.createdAt ?? now,
             record.updatedAt ?? now,
         ]);

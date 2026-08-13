@@ -1,0 +1,1 @@
+{"version":3,"file":"media-converter.d.ts","sourceRoot":"","sources":["../../src/messenger/media-converter.ts"],"names":[],"mappings":"AACA,OAAO,KAAK,EAAE,UAAU,EAAE,MAAM,IAAI,CAAC;AAmBrC,wBAAgB,kBAAkB,CAChC,IAAI,EAAE,MAAM,GAAG,MAAM,EACrB,QAAQ,EAAE,MAAM,GACf;IAAE,MAAM,EAAE,UAAU,CAAC;IAAC,QAAQ,EAAE,MAAM,CAAA;CAAE,CAO1C"}

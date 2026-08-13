@@ -31,5 +31,21 @@ export interface WhatsAppEngineConfig {
      */
     syncFullHistory?: boolean;
 }
+export interface MessengerEngineConfig {
+    /** Encrypted appState JSON string (preferred) or raw appState array. */
+    appState?: string;
+    /** Facebook email for login (alternative to appState). */
+    email?: string;
+    /** Facebook password for login (required with email). */
+    password?: string;
+    /** Pino log level. Default: "warn". */
+    logLevel?: string;
+    /** Maximum media upload size in bytes. Default: 50 MB. */
+    mediaMaxSize?: number;
+    /** Optional hook to encrypt appState before persisting to the adapter. */
+    encryptAppState?: (plain: string) => string;
+    /** Optional hook to decrypt appState after reading from the adapter. */
+    decryptAppState?: (cipher: string) => string;
+}
 export type ChatState = "typing" | "recording" | "paused";
 //# sourceMappingURL=config.d.ts.map
