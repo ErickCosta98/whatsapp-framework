@@ -31,16 +31,18 @@ describe("adapters / postgres (mocked)", () => {
   });
 
   describe("initialize", () => {
-    it("creates all five tables", async () => {
+    it("creates all five tables and migrates columns", async () => {
       mockQuery.mockResolvedValue({ rows: [] });
       await adapter.initialize();
-      expect(mockQuery).toHaveBeenCalledTimes(5);
+      expect(mockQuery).toHaveBeenCalledTimes(7);
       const calls = mockQuery.mock.calls.map((c: any[]) => c[0] as string);
       expect(calls.some((sql) => sql.includes("CREATE TABLE IF NOT EXISTS sessions"))).toBe(true);
       expect(calls.some((sql) => sql.includes("CREATE TABLE IF NOT EXISTS messages"))).toBe(true);
       expect(calls.some((sql) => sql.includes("CREATE TABLE IF NOT EXISTS lid_mappings"))).toBe(true);
       expect(calls.some((sql) => sql.includes("CREATE TABLE IF NOT EXISTS contacts"))).toBe(true);
       expect(calls.some((sql) => sql.includes("CREATE TABLE IF NOT EXISTS chats"))).toBe(true);
+      expect(calls.some((sql) => sql.includes("ADD COLUMN IF NOT EXISTS platform"))).toBe(true);
+      expect(calls.some((sql) => sql.includes("ADD COLUMN IF NOT EXISTS app_state"))).toBe(true);
     });
   });
 
@@ -63,6 +65,8 @@ describe("adapters / postgres (mocked)", () => {
             status: "connected",
             phone: "+123",
             pushName: "Bot",
+            platform: "messenger",
+            appState: "enc",
             createdAt: 1000,
             updatedAt: 2000,
           },
@@ -72,6 +76,8 @@ describe("adapters / postgres (mocked)", () => {
       expect(result).toEqual({
         name: "bot-1",
         status: "connected",
+        platform: "messenger",
+        appState: "enc",
         phone: "+123",
         pushName: "Bot",
         createdAt: 1000,
@@ -81,11 +87,21 @@ describe("adapters / postgres (mocked)", () => {
 
     it("upsertSession uses INSERT ... ON CONFLICT DO UPDATE", async () => {
       mockQuery.mockResolvedValue({ rowCount: 1 });
-      const record: SessionRecord = { name: "bot-1", status: "connected" };
+      const record: SessionRecord = {
+        name: "bot-1",
+        status: "connected",
+        platform: "messenger",
+        appState: "enc",
+      };
       await adapter.upsertSession(record);
       const sql = mockQuery.mock.calls[0][0] as string;
       expect(sql).toMatch(/INSERT INTO sessions/);
       expect(sql).toMatch(/ON CONFLICT \(name\) DO UPDATE/);
+      expect(sql).toMatch(/platform = EXCLUDED.platform/);
+      expect(sql).toMatch(/app_state = EXCLUDED.app_state/);
+      const params = mockQuery.mock.calls[0][1] as unknown[];
+      expect(params[4]).toBe("messenger");
+      expect(params[5]).toBe("enc");
     });
 
     it("deleteSession executes DELETE with name param", async () => {
@@ -193,7 +209,7 @@ describe("adapters / postgres (mocked)", () => {
   describe("edge cases", () => {
     it("handles null values gracefully", async () => {
       mockQuery.mockResolvedValue({
-        rows: [{ name: "bot-1", status: "connected", phone: null, pushName: null, createdAt: null, updatedAt: null }],
+        rows: [{ name: "bot-1", status: "connected", phone: null, pushName: null, platform: null, appState: null, createdAt: null, updatedAt: null }],
       });
       const result = await adapter.getSession("bot-1");
       expect(result).toEqual({
@@ -201,6 +217,8 @@ describe("adapters / postgres (mocked)", () => {
         status: "connected",
         phone: null,
         pushName: null,
+        platform: "whatsapp",
+        appState: null,
         createdAt: undefined,
         updatedAt: undefined,
       });

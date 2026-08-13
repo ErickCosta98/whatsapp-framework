@@ -38,13 +38,27 @@ describe("adapters / mysql (mocked)", () => {
     it("creates all five tables", async () => {
       mockExecute.mockResolvedValue([[], []]);
       await adapter.initialize();
-      expect(mockExecute).toHaveBeenCalledTimes(5);
+      expect(mockExecute).toHaveBeenCalledTimes(7);
       const calls = mockExecute.mock.calls.map((c: any[]) => c[0] as string);
       expect(calls.some((sql) => sql.includes("CREATE TABLE IF NOT EXISTS sessions"))).toBe(true);
       expect(calls.some((sql) => sql.includes("CREATE TABLE IF NOT EXISTS messages"))).toBe(true);
       expect(calls.some((sql) => sql.includes("CREATE TABLE IF NOT EXISTS lid_mappings"))).toBe(true);
       expect(calls.some((sql) => sql.includes("CREATE TABLE IF NOT EXISTS contacts"))).toBe(true);
       expect(calls.some((sql) => sql.includes("CREATE TABLE IF NOT EXISTS chats"))).toBe(true);
+      expect(calls.some((sql) => sql.includes("ADD COLUMN platform"))).toBe(true);
+      expect(calls.some((sql) => sql.includes("ADD COLUMN app_state"))).toBe(true);
+    });
+
+    it("ignores duplicate column errors on migration", async () => {
+      mockExecute.mockImplementation(async (sql: string) => {
+        if (sql.includes("ADD COLUMN")) {
+          const err: any = new Error("Duplicate column name");
+          err.code = "ER_DUP_FIELDNAME";
+          throw err;
+        }
+        return [{ affectedRows: 0 }, []];
+      });
+      await expect(adapter.initialize()).resolves.not.toThrow();
     });
   });
 
@@ -67,6 +81,8 @@ describe("adapters / mysql (mocked)", () => {
             status: "connected",
             phone: "+123",
             pushName: "Bot",
+            platform: "messenger",
+            appState: "enc",
             createdAt: 1000,
             updatedAt: 2000,
           },
@@ -77,6 +93,8 @@ describe("adapters / mysql (mocked)", () => {
       expect(result).toEqual({
         name: "bot-1",
         status: "connected",
+        platform: "messenger",
+        appState: "enc",
         phone: "+123",
         pushName: "Bot",
         createdAt: 1000,
@@ -86,11 +104,21 @@ describe("adapters / mysql (mocked)", () => {
 
     it("upsertSession uses INSERT ... ON DUPLICATE KEY UPDATE", async () => {
       mockExecute.mockResolvedValue([{ affectedRows: 1 }, []]);
-      const record: SessionRecord = { name: "bot-1", status: "connected" };
+      const record: SessionRecord = {
+        name: "bot-1",
+        status: "connected",
+        platform: "messenger",
+        appState: "enc",
+      };
       await adapter.upsertSession(record);
       const sql = mockExecute.mock.calls[0][0] as string;
       expect(sql).toMatch(/INSERT INTO sessions/);
       expect(sql).toMatch(/ON DUPLICATE KEY UPDATE/);
+      expect(sql).toMatch(/platform = VALUES\(platform\)/);
+      expect(sql).toMatch(/app_state = VALUES\(app_state\)/);
+      const params = mockExecute.mock.calls[0][1] as unknown[];
+      expect(params[4]).toBe("messenger");
+      expect(params[5]).toBe("enc");
     });
 
     it("deleteSession executes DELETE with name param", async () => {
@@ -201,7 +229,7 @@ describe("adapters / mysql (mocked)", () => {
   describe("edge cases", () => {
     it("handles null values gracefully", async () => {
       mockExecute.mockResolvedValue([
-        [{ name: "bot-1", status: "connected", phone: null, pushName: null, createdAt: null, updatedAt: null }],
+        [{ name: "bot-1", status: "connected", phone: null, pushName: null, platform: null, appState: null, createdAt: null, updatedAt: null }],
         [],
       ]);
       const result = await adapter.getSession("bot-1");
@@ -210,6 +238,8 @@ describe("adapters / mysql (mocked)", () => {
         status: "connected",
         phone: null,
         pushName: null,
+        platform: "whatsapp",
+        appState: null,
         createdAt: undefined,
         updatedAt: undefined,
       });

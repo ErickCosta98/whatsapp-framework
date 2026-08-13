@@ -71,6 +71,19 @@ export class SQLiteAdapter implements IDatabaseAdapter {
       );
     `;
     this.db.exec(ddl);
+
+    // Idempotent migration: add platform and app_state if missing
+    const columns = this.db
+      .prepare(`PRAGMA table_info(sessions)`)
+      .all() as Array<{ name: string }>;
+    const colNames = new Set(columns.map((c) => c.name));
+    if (!colNames.has("platform")) {
+      this.db.exec(`ALTER TABLE sessions ADD COLUMN platform TEXT DEFAULT 'whatsapp'`);
+    }
+    if (!colNames.has("app_state")) {
+      this.db.exec(`ALTER TABLE sessions ADD COLUMN app_state TEXT`);
+    }
+
     return Promise.resolve();
   }
 
@@ -80,6 +93,7 @@ export class SQLiteAdapter implements IDatabaseAdapter {
     const row = this.db
       .prepare(
         `SELECT name, status, phone, push_name AS pushName,
+                platform, app_state AS appState,
                 created_at AS createdAt, updated_at AS updatedAt
          FROM sessions WHERE name = ?`,
       )
@@ -89,6 +103,8 @@ export class SQLiteAdapter implements IDatabaseAdapter {
           status: string;
           phone: string | null;
           pushName: string | null;
+          platform: string | null;
+          appState: string | null;
           createdAt: number | null;
           updatedAt: number | null;
         }
@@ -97,6 +113,8 @@ export class SQLiteAdapter implements IDatabaseAdapter {
     return Promise.resolve({
       name: row.name,
       status: row.status,
+      platform: (row.platform ?? "whatsapp") as "whatsapp" | "messenger",
+      appState: row.appState ?? null,
       phone: row.phone,
       pushName: row.pushName,
       createdAt: row.createdAt ?? undefined,
@@ -108,12 +126,14 @@ export class SQLiteAdapter implements IDatabaseAdapter {
     const now = Date.now();
     this.db
       .prepare(
-        `INSERT INTO sessions (name, status, phone, push_name, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?)
+        `INSERT INTO sessions (name, status, phone, push_name, platform, app_state, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(name) DO UPDATE SET
            status = excluded.status,
            phone = excluded.phone,
            push_name = excluded.push_name,
+           platform = excluded.platform,
+           app_state = excluded.app_state,
            updated_at = excluded.updated_at`,
       )
       .run(
@@ -121,6 +141,8 @@ export class SQLiteAdapter implements IDatabaseAdapter {
         record.status,
         record.phone ?? null,
         record.pushName ?? null,
+        record.platform ?? "whatsapp",
+        record.appState ?? null,
         record.createdAt ?? now,
         record.updatedAt ?? now,
       );

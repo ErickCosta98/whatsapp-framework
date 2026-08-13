@@ -9,3 +9,5 @@ node_modules/
 coverage/
 *.tsbuildinfo
 .npmrc
+nkxfca_database/
+appstate*.json

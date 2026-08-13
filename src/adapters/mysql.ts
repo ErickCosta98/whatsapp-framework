@@ -65,6 +65,21 @@ export class MySQLAdapter implements IDatabaseAdapter {
     for (const sql of ddl) {
       await this.pool.execute(sql);
     }
+
+    // Idempotent migration: add platform and app_state columns
+    const migrations = [
+      `ALTER TABLE sessions ADD COLUMN platform VARCHAR(20) DEFAULT 'whatsapp'`,
+      `ALTER TABLE sessions ADD COLUMN app_state TEXT`,
+    ];
+    for (const sql of migrations) {
+      try {
+        await this.pool.execute(sql);
+      } catch (err: any) {
+        if (err.code !== "ER_DUP_FIELDNAME" && !err.message?.includes("Duplicate column name")) {
+          throw err;
+        }
+      }
+    }
   }
 
   /* ─── Session store ─── */
@@ -72,6 +87,7 @@ export class MySQLAdapter implements IDatabaseAdapter {
   async getSession(name: string): Promise<SessionRecord | null> {
     const [rows] = await this.pool.execute<mysql.RowDataPacket[]>(
       `SELECT name, status, phone, push_name AS pushName,
+              platform, app_state AS appState,
               created_at AS createdAt, updated_at AS updatedAt
        FROM sessions WHERE name = ?`,
       [name],
@@ -81,6 +97,8 @@ export class MySQLAdapter implements IDatabaseAdapter {
     return {
       name: r.name,
       status: r.status,
+      platform: (r.platform ?? "whatsapp") as "whatsapp" | "messenger",
+      appState: r.appState ?? null,
       phone: r.phone ?? null,
       pushName: r.pushName ?? null,
       createdAt: r.createdAt ?? undefined,
@@ -91,18 +109,22 @@ export class MySQLAdapter implements IDatabaseAdapter {
   async upsertSession(record: SessionRecord): Promise<void> {
     const now = Date.now();
     await this.pool.execute(
-      `INSERT INTO sessions (name, status, phone, push_name, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?)
+      `INSERT INTO sessions (name, status, phone, push_name, platform, app_state, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
        ON DUPLICATE KEY UPDATE
          status = VALUES(status),
          phone = VALUES(phone),
          push_name = VALUES(push_name),
+         platform = VALUES(platform),
+         app_state = VALUES(app_state),
          updated_at = VALUES(updated_at)`,
       [
         record.name,
         record.status,
         record.phone ?? null,
         record.pushName ?? null,
+        record.platform ?? "whatsapp",
+        record.appState ?? null,
         record.createdAt ?? now,
         record.updatedAt ?? now,
       ],

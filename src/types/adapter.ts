@@ -9,6 +9,8 @@
 export interface SessionRecord {
   name: string;
   status: string;
+  platform?: "whatsapp" | "messenger";
+  appState?: string | null;
   phone?: string | null;
   pushName?: string | null;
   createdAt?: number;

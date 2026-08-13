@@ -15,6 +15,21 @@ describe("adapters / sqlite", () => {
       // second call should not throw
       await expect(adapter.initialize()).resolves.not.toThrow();
     });
+
+    it("adds platform and app_state columns idempotently", async () => {
+      const adapter = await createAdapter();
+      await adapter.initialize(); // second call
+      await adapter.upsertSession({
+        name: "bot-1",
+        status: "connected",
+        platform: "messenger",
+        appState: "enc",
+      });
+      const result = await adapter.getSession("bot-1");
+      expect(result).toEqual(
+        expect.objectContaining({ platform: "messenger", appState: "enc" }),
+      );
+    });
   });
 
   describe("session CRUD", () => {
@@ -51,6 +66,27 @@ describe("adapters / sqlite", () => {
       await adapter.upsertSession({ name: "bot-1", status: "connected" });
       await adapter.deleteSession("bot-1");
       expect(await adapter.getSession("bot-1")).toBeNull();
+    });
+
+    it("round-trips platform and appState", async () => {
+      const adapter = await createAdapter();
+      const record: SessionRecord = {
+        name: "bot-m",
+        status: "connected",
+        platform: "messenger",
+        appState: "encrypted",
+      };
+      await adapter.upsertSession(record);
+      const result = await adapter.getSession("bot-m");
+      expect(result).toEqual(expect.objectContaining(record));
+    });
+
+    it("defaults platform to whatsapp when absent", async () => {
+      const adapter = await createAdapter();
+      await adapter.upsertSession({ name: "bot-w", status: "connected" });
+      const result = await adapter.getSession("bot-w");
+      expect(result?.platform).toBe("whatsapp");
+      expect(result?.appState).toBeNull();
     });
   });
 
