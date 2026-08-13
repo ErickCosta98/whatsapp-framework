@@ -28,6 +28,10 @@
     "./postgres": {
       "import": "./dist/adapters/postgres.js",
       "types": "./dist/adapters/postgres.d.ts"
+    },
+    "./messenger": {
+      "import": "./dist/messenger/index.js",
+      "types": "./dist/messenger/index.d.ts"
     }
   },
   "files": [
@@ -55,7 +59,8 @@
   "peerDependencies": {
     "better-sqlite3": "^11.0.0",
     "mysql2": "^3.0.0",
-    "pg": "^8.0.0"
+    "pg": "^8.0.0",
+    "@neoaz07/nkxfca": "1.0.10"
   },
   "peerDependenciesMeta": {
     "better-sqlite3": {
@@ -65,6 +70,9 @@
       "optional": true
     },
     "pg": {
+      "optional": true
+    },
+    "@neoaz07/nkxfca": {
       "optional": true
     }
   },
@@ -79,6 +87,6 @@
     "vitest": "^2.0.0"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22.0.0"
   }
 }

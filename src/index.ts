@@ -15,6 +15,8 @@
  */
 
 export { WhatsAppEngine } from "./engine.js";
+export { MessengerEngine } from "./messenger/engine.js";
+export { createEngine } from "./factory.js";
 export { SessionManager } from "./session.js";
 export * from "./types/index.js";
 export * from "./anti-ban/typing.js";
@@ -22,3 +24,5 @@ export * from "./anti-ban/throttling.js";
 export * from "./lid/resolver.js";
 export * from "./retry/store.js";
 export * from "./normalizer.js";
+export { normalizeMessengerMessage } from "./messenger/normalizer.js";
+export { bufferToReadStream } from "./messenger/media-converter.js";
