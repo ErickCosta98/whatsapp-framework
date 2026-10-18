@@ -5,8 +5,10 @@ import makeWASocket, {
   useMultiFileAuthState,
   fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
+  downloadMediaMessage,
   type ConnectionState,
   type WAMessage,
+  proto,
 } from "@whiskeysockets/baileys";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -18,12 +20,20 @@ import type {
   SendResult,
   MediaInput,
   EngineEventMap,
+  ContactRecord,
+  ChatRecord,
+  IncomingMessage,
 } from "./types/index.js";
 import { SessionManager } from "./session.js";
 import { calculateBackoffDelay, isTerminalError } from "./reconnect/backoff.js";
 import { simulateTyping } from "./anti-ban/typing.js";
 import { resolveDeliverableJid } from "./lid/resolver.js";
-import { normalizeIncomingMessage, normalizeSentResult, DEFAULT_MEDIA_CAP_BYTES } from "./normalizer.js";
+import {
+  normalizeIncomingMessage,
+  normalizeSentResult,
+  unwrapViewOnce,
+  DEFAULT_MEDIA_CAP_BYTES,
+} from "./normalizer.js";
 import { createMessageStore, type MessageStore } from "./retry/store.js";
 
 /**
@@ -57,6 +67,9 @@ export class WhatsAppEngine extends EventEmitter {
 
   /** Per-session in-memory message stores for Baileys retry protocol. */
   private messageStores = new Map<string, MessageStore>();
+
+  /** Deduplication cache for message:create events. */
+  private createdMessageIds = new Set<string>();
 
   constructor(config: WhatsAppEngineConfig) {
     super();
@@ -122,9 +135,29 @@ export class WhatsAppEngine extends EventEmitter {
     this.sessions.setConnecting(name, true);
     try {
       await this.connectInner(name);
+    } catch (err) {
+      this.emitError(name, err);
+      throw err;
     } finally {
       this.sessions.setConnecting(name, false);
     }
+  }
+
+  private emitError(sessionName: string, err: unknown): void {
+    const error = err instanceof Error ? err : new Error(String(err));
+    if (this.listenerCount("error") > 0) {
+      this.emit("error", { sessionName, error });
+    }
+  }
+
+  private emitMessageCreate(sessionName: string, message: IncomingMessage): void {
+    if (this.createdMessageIds.has(message.id)) return;
+    if (this.createdMessageIds.size > 2000) {
+      const first = this.createdMessageIds.values().next().value;
+      if (first) this.createdMessageIds.delete(first);
+    }
+    this.createdMessageIds.add(message.id);
+    this.emit("message:create", { sessionName, message });
   }
 
   private async connectInner(name: string): Promise<void> {
@@ -152,6 +185,7 @@ export class WhatsAppEngine extends EventEmitter {
         previous.ev.removeAllListeners("connection.update");
         previous.ev.removeAllListeners("creds.update");
         previous.ev.removeAllListeners("messages.upsert");
+        previous.ev.removeAllListeners("messages.update");
         previous.ev.removeAllListeners("contacts.upsert");
         previous.ev.removeAllListeners("chats.upsert");
         previous.ev.removeAllListeners("messaging-history.set");
@@ -161,6 +195,18 @@ export class WhatsAppEngine extends EventEmitter {
         // end() may already have run from Baileys' own close handler.
       }
       this.sessions.setSocket(name, null);
+    }
+
+    // Hydrate LID mappings from adapter when available.
+    if (this.adapter?.listLidMappings) {
+      try {
+        const mappings = await this.adapter.listLidMappings();
+        for (const m of mappings) {
+          this.lidMap.set(m.lid, m.pn);
+        }
+      } catch (err) {
+        this.logger.warn({ session: name, err }, "failed to load LID mappings from adapter");
+      }
     }
 
     // Create a per-session message store for the retry protocol.
@@ -180,11 +226,22 @@ export class WhatsAppEngine extends EventEmitter {
         if (!key?.id) return undefined;
         // Prefer adapter-backed store when available.
         if (this.adapter) {
-          const stored = await this.adapter.getMessage(name, key.id);
-          if (stored) return stored.message as any;
+          try {
+            const stored = await this.adapter.getMessage(name, key.id);
+            if (stored) {
+              const raw = stored.message as any;
+              return (raw?.message ?? raw) as any;
+            }
+          } catch (err) {
+            this.logger.error({ session: name, keyId: key.id, err }, "failed to getMessage from adapter");
+            this.emitError(name, err);
+          }
         }
-        const stored = messageStore.get(key.id);
-        return stored as any ?? undefined;
+        const stored = messageStore.get(key.id) as any;
+        if (stored) {
+          return (stored?.message ?? stored) as any;
+        }
+        return undefined;
       },
     });
 
@@ -198,35 +255,70 @@ export class WhatsAppEngine extends EventEmitter {
     });
 
     sock.ev.on("creds.update", () => {
-      void saveCreds();
+      Promise.resolve(saveCreds()).catch((err) => {
+        this.logger.error({ session: name, err }, "failed to save credentials");
+        this.emitError(name, err);
+      });
       if (this.adapter) {
         const session = this.sessions.get(name);
         if (session) {
-          void this.adapter.upsertSession({
-            name,
-            status: session.status,
-            phone: session.phone,
-            pushName: session.pushName,
-            updatedAt: Date.now(),
+          Promise.resolve(
+            this.adapter.upsertSession({
+              name,
+              status: session.status,
+              phone: session.phone,
+              pushName: session.pushName,
+              updatedAt: Date.now(),
+            }),
+          ).catch((err) => {
+            this.logger.error({ session: name, err }, "adapter upsertSession failed");
+            this.emitError(name, err);
           });
         }
       }
     });
 
     sock.ev.on("messages.upsert", (event: { messages: WAMessage[]; type: string }) => {
-      this.handleMessagesUpsert(name, event);
+      void this.handleMessagesUpsert(name, event);
+    });
+
+    sock.ev.on("messages.update", (updates: any[]) => {
+      for (const update of updates) {
+        if (update.key?.id && update.update?.status !== undefined) {
+          const statusValue = update.update.status;
+          const statusMap: Record<number, string> = {
+            0: "error",
+            1: "pending",
+            2: "server_ack",
+            3: "delivery_ack",
+            4: "read",
+            5: "played",
+          };
+          const statusStr =
+            typeof statusValue === "number"
+              ? (statusMap[statusValue] ?? String(statusValue))
+              : String(statusValue).toLowerCase();
+          this.emit("message:ack", update.key.id, statusStr);
+        }
+      }
     });
 
     sock.ev.on("contacts.upsert", (contacts: any[]) => {
       if (!this.adapter) return;
       for (const contact of contacts) {
-        void this.adapter.upsertContact({
-          id: contact.id,
-          name: contact.name ?? null,
-          pushName: contact.notify ?? null,
-          number: contact.phoneNumber ?? contact.id?.split("@")[0] ?? null,
-          isMyContact: contact.isMyContact ?? false,
-          isBlocked: false,
+        Promise.resolve(
+          this.adapter.upsertContact({
+            id: contact.id,
+            sessionName: name,
+            name: contact.name ?? null,
+            pushName: contact.notify ?? null,
+            number: contact.phoneNumber ?? contact.id?.split("@")[0] ?? null,
+            isMyContact: contact.isMyContact ?? false,
+            isBlocked: false,
+          }),
+        ).catch((err) => {
+          this.logger.error({ session: name, contactId: contact?.id, err }, "adapter upsertContact failed");
+          this.emitError(name, err);
         });
       }
     });
@@ -234,14 +326,20 @@ export class WhatsAppEngine extends EventEmitter {
     sock.ev.on("chats.upsert", (chats: any[]) => {
       if (!this.adapter) return;
       for (const chat of chats) {
-        void this.adapter.upsertChat({
-          id: chat.id,
-          name: chat.name ?? null,
-          phoneJid: null,
-          unreadCount: chat.unreadCount ?? 0,
-          lastMessageTimestamp: chat.lastMessageTimestamp
-            ? Number(chat.lastMessageTimestamp)
-            : undefined,
+        Promise.resolve(
+          this.adapter.upsertChat({
+            id: chat.id,
+            sessionName: name,
+            name: chat.name ?? null,
+            phoneJid: null,
+            unreadCount: chat.unreadCount ?? 0,
+            lastMessageTimestamp: chat.lastMessageTimestamp
+              ? Number(chat.lastMessageTimestamp)
+              : undefined,
+          }),
+        ).catch((err) => {
+          this.logger.error({ session: name, chatId: chat?.id, err }, "adapter upsertChat failed");
+          this.emitError(name, err);
         });
       }
     });
@@ -252,7 +350,12 @@ export class WhatsAppEngine extends EventEmitter {
         if (mapping.lid && mapping.pn) {
           this.lidMap.set(mapping.lid, mapping.pn);
           if (this.adapter) {
-            void this.adapter.upsertLidMapping(mapping.lid, mapping.pn);
+            Promise.resolve(
+              this.adapter.upsertLidMapping(mapping.lid, mapping.pn),
+            ).catch((err) => {
+              this.logger.error({ session: name, lid: mapping.lid, err }, "adapter upsertLidMapping failed");
+              this.emitError(name, err);
+            });
           }
         }
       }
@@ -262,7 +365,12 @@ export class WhatsAppEngine extends EventEmitter {
       if (lid && pn) {
         this.lidMap.set(lid, pn);
         if (this.adapter) {
-          void this.adapter.upsertLidMapping(lid, pn);
+          Promise.resolve(
+            this.adapter.upsertLidMapping(lid, pn),
+          ).catch((err) => {
+            this.logger.error({ session: name, lid, err }, "adapter upsertLidMapping failed");
+            this.emitError(name, err);
+          });
         }
       }
     });
@@ -286,6 +394,7 @@ export class WhatsAppEngine extends EventEmitter {
         session.socket.ev.removeAllListeners("connection.update");
         session.socket.ev.removeAllListeners("creds.update");
         session.socket.ev.removeAllListeners("messages.upsert");
+        session.socket.ev.removeAllListeners("messages.update");
         session.socket.ev.removeAllListeners("contacts.upsert");
         session.socket.ev.removeAllListeners("chats.upsert");
         session.socket.ev.removeAllListeners("messaging-history.set");
@@ -313,6 +422,7 @@ export class WhatsAppEngine extends EventEmitter {
     for (const name of names) {
       await this.disconnect(name);
     }
+    this.createdMessageIds.clear();
     this.removeAllListeners();
   }
 
@@ -337,10 +447,25 @@ export class WhatsAppEngine extends EventEmitter {
       throw new Error("Invalid phone number format");
     }
 
-    const code = await session.socket.requestPairingCode(phoneNumber);
+    const digitsOnly = phoneNumber.replace(/\D/g, "");
+    const code = await session.socket.requestPairingCode(digitsOnly);
     this.sessions.setPairingCode(name, code);
     this.emit("connection", { sessionName: name, status: "pairing_code", pairingCode: code });
     return code;
+  }
+
+  private async resolveDeliverableJidAsync(chatId: string): Promise<string> {
+    if (chatId.endsWith("@lid") && !this.lidMap.has(chatId) && this.adapter) {
+      try {
+        const phone = await this.adapter.getLidMapping(chatId);
+        if (phone) {
+          this.lidMap.set(chatId, phone);
+        }
+      } catch {
+        // ignore
+      }
+    }
+    return resolveDeliverableJid(chatId, this.lidMap);
   }
 
   /**
@@ -354,9 +479,14 @@ export class WhatsAppEngine extends EventEmitter {
       throw new Error("Session not connected");
     }
 
-    const jid = resolveDeliverableJid(chatId, this.lidMap);
+    const jid = await this.resolveDeliverableJidAsync(chatId);
 
     if (this.config.simulateTyping) {
+      try {
+        await session.socket.sendPresenceUpdate("composing", jid);
+      } catch {
+        // Presence failures should not abort message sending
+      }
       await simulateTyping(text.length, this.config.simulateTypingMaxMs);
     }
 
@@ -369,12 +499,29 @@ export class WhatsAppEngine extends EventEmitter {
         store.set(sent.key.id, sent);
       }
       if (this.adapter) {
-        void this.adapter.putMessage(name, {
-          keyId: sent.key.id,
-          message: sent,
-          timestamp: Date.now(),
+        Promise.resolve(
+          this.adapter.putMessage(name, {
+            keyId: sent.key.id,
+            message: sent,
+            timestamp: Date.now(),
+          }),
+        ).catch((err) => {
+          this.logger.error({ session: name, keyId: sent.key.id, err }, "adapter putMessage failed in sendText");
+          this.emitError(name, err);
         });
       }
+
+      const normalizedSent = normalizeIncomingMessage(
+        {
+          ...sent,
+          key: {
+            ...sent.key,
+            fromMe: true,
+          },
+        },
+        this.lidMap,
+      );
+      this.emitMessageCreate(name, normalizedSent);
     }
 
     return normalizeSentResult(sent, jid);
@@ -396,26 +543,41 @@ export class WhatsAppEngine extends EventEmitter {
       throw new Error("Session not connected");
     }
 
-    // Validate size
-    const data = Buffer.isBuffer(media.data)
-      ? media.data
-      : Buffer.from(media.data, "base64");
-    if (data.length > this.config.mediaMaxSize) {
-      throw new Error("Media exceeds size cap");
+    const isUrl = typeof media.data === "string" && /^https?:\/\//i.test(media.data);
+    let uploadData: Buffer | { url: string };
+
+    if (isUrl) {
+      uploadData = { url: media.data as string };
+    } else {
+      const rawString = typeof media.data === "string" ? media.data : undefined;
+      const base64Data = rawString && rawString.includes(";base64,")
+        ? rawString.split(";base64,")[1]
+        : rawString;
+
+      const data = Buffer.isBuffer(media.data)
+        ? media.data
+        : Buffer.from(base64Data ?? "", "base64");
+
+      if (data.length > this.config.mediaMaxSize) {
+        throw new Error("Media exceeds size cap");
+      }
+      uploadData = data;
     }
 
-    const jid = resolveDeliverableJid(chatId, this.lidMap);
+    const jid = await this.resolveDeliverableJidAsync(chatId);
 
     let content: Record<string, any>;
-    if (media.mimetype.startsWith("image/")) {
-      content = { image: data, mimetype: media.mimetype, caption: media.caption };
+    if (media.mimetype === "image/webp" || media.mimetype.includes("sticker")) {
+      content = { sticker: uploadData, mimetype: media.mimetype };
+    } else if (media.mimetype.startsWith("image/")) {
+      content = { image: uploadData, mimetype: media.mimetype, caption: media.caption };
     } else if (media.mimetype.startsWith("video/")) {
-      content = { video: data, mimetype: media.mimetype, caption: media.caption };
+      content = { video: uploadData, mimetype: media.mimetype, caption: media.caption };
     } else if (media.mimetype.startsWith("audio/")) {
-      content = { audio: data, mimetype: media.mimetype, ptt: media.ptt ?? false };
+      content = { audio: uploadData, mimetype: media.mimetype, ptt: media.ptt ?? false };
     } else {
       content = {
-        document: data,
+        document: uploadData,
         mimetype: media.mimetype,
         fileName: media.filename ?? "file",
         caption: media.caption,
@@ -434,12 +596,29 @@ export class WhatsAppEngine extends EventEmitter {
         store.set(sent.key.id, sent);
       }
       if (this.adapter) {
-        void this.adapter.putMessage(name, {
-          keyId: sent.key.id,
-          message: sent,
-          timestamp: Date.now(),
+        Promise.resolve(
+          this.adapter.putMessage(name, {
+            keyId: sent.key.id,
+            message: sent,
+            timestamp: Date.now(),
+          }),
+        ).catch((err) => {
+          this.logger.error({ session: name, keyId: sent.key.id, err }, "adapter putMessage failed in sendMedia");
+          this.emitError(name, err);
         });
       }
+
+      const normalizedSent = normalizeIncomingMessage(
+        {
+          ...sent,
+          key: {
+            ...sent.key,
+            fromMe: true,
+          },
+        },
+        this.lidMap,
+      );
+      this.emitMessageCreate(name, normalizedSent);
     }
 
     return normalizeSentResult(sent, jid);
@@ -460,10 +639,92 @@ export class WhatsAppEngine extends EventEmitter {
       throw new Error("Session not connected");
     }
 
-    const jid = resolveDeliverableJid(chatId, this.lidMap);
+    const jid = await this.resolveDeliverableJidAsync(chatId);
     const presence =
       state === "typing" ? "composing" : state === "recording" ? "recording" : "paused";
     await session.socket.sendPresenceUpdate(presence, jid);
+  }
+
+  /**
+   * Download and decrypt media content from an incoming message or message ID.
+   *
+   * @param name — session name
+   * @param message — IncomingMessage, raw WAMessage, or message ID (string)
+   * @returns Buffer containing decrypted media bytes
+   * @throws if session is not connected or message cannot be found
+   */
+  async downloadMedia(
+    name: string,
+    message: IncomingMessage | WAMessage | string,
+  ): Promise<Buffer> {
+    const session = this.sessions.get(name);
+    if (!session || session.status !== "connected" || !session.socket) {
+      throw new Error("Session not connected");
+    }
+
+    let rawMsg: WAMessage | undefined;
+
+    if (typeof message === "string") {
+      const inMemory = this.messageStores.get(name)?.get(message) as WAMessage | undefined;
+      if (inMemory) {
+        rawMsg = inMemory;
+      } else if (this.adapter) {
+        const stored = await this.adapter.getMessage(name, message);
+        if (stored?.message) {
+          rawMsg = stored.message as WAMessage;
+        }
+      }
+      if (!rawMsg) {
+        throw new Error(`Message ${message} not found`);
+      }
+    } else if ("raw" in message && message.raw) {
+      rawMsg = message.raw as WAMessage;
+    } else if ("key" in message && "message" in message) {
+      rawMsg = message as WAMessage;
+    } else if ("id" in message && typeof message.id === "string") {
+      const inMemory = this.messageStores.get(name)?.get(message.id) as WAMessage | undefined;
+      if (inMemory) {
+        rawMsg = inMemory;
+      } else if (this.adapter) {
+        const stored = await this.adapter.getMessage(name, message.id);
+        if (stored?.message) {
+          rawMsg = stored.message as WAMessage;
+        }
+      }
+      if (!rawMsg) {
+        throw new Error(`Message ${message.id} not found in store or adapter`);
+      }
+    }
+
+    if (!rawMsg) {
+      throw new Error("Invalid message provided for media download");
+    }
+
+    return downloadMediaMessage(
+      rawMsg,
+      "buffer",
+      {},
+      {
+        logger: this.logger,
+        reuploadRequest: session.socket.updateMediaMessage,
+      },
+    );
+  }
+
+  /**
+   * List contacts from the registered adapter, optionally filtered by session name.
+   */
+  async listContacts(sessionName?: string): Promise<ContactRecord[]> {
+    if (!this.adapter) return [];
+    return this.adapter.listContacts(sessionName);
+  }
+
+  /**
+   * List chats from the registered adapter, optionally filtered by session name.
+   */
+  async listChats(sessionName?: string): Promise<ChatRecord[]> {
+    if (!this.adapter) return [];
+    return this.adapter.listChats(sessionName);
   }
 
   /**
@@ -600,6 +861,7 @@ export class WhatsAppEngine extends EventEmitter {
         this.sessions.clearReconnectTimer(name);
         this.connect(name).catch((err) => {
           this.logger.warn({ session: name, err }, "reconnect attempt failed");
+          this.emitError(name, err);
         });
       }, delay);
 
@@ -607,19 +869,52 @@ export class WhatsAppEngine extends EventEmitter {
     }
   }
 
-  private handleMessagesUpsert(
+  private async handleMessagesUpsert(
     name: string,
     event: { messages: WAMessage[]; type: string },
-  ): void {
+  ): Promise<void> {
     for (const msg of event.messages) {
       if (!msg.key?.remoteJid || !msg.key.id) continue;
+
+      // Store in memory store for retry protocol and media download.
+      const store = this.messageStores.get(name);
+      if (store) {
+        store.set(msg.key.id, msg);
+      }
 
       // Capture remoteJidAlt LID→phone mapping when available.
       const remoteJidAlt: string | undefined = (msg.key as any).remoteJidAlt;
       if (msg.key.remoteJid.endsWith("@lid") && remoteJidAlt) {
         this.lidMap.set(msg.key.remoteJid, remoteJidAlt);
         if (this.adapter) {
-          void this.adapter.upsertLidMapping(msg.key.remoteJid, remoteJidAlt);
+          Promise.resolve(
+            this.adapter.upsertLidMapping(msg.key.remoteJid, remoteJidAlt),
+          ).catch((err) => {
+            this.logger.error({ session: name, lid: msg.key.remoteJid, err }, "adapter upsertLidMapping failed in upsert");
+            this.emitError(name, err);
+          });
+        }
+      } else if (msg.key.remoteJid.endsWith("@lid") && !this.lidMap.has(msg.key.remoteJid) && this.adapter) {
+        try {
+          const phone = await this.adapter.getLidMapping(msg.key.remoteJid);
+          if (phone) {
+            this.lidMap.set(msg.key.remoteJid, phone);
+          }
+        } catch {
+          // ignore lookup failure
+        }
+      }
+
+      // Check participant if group message from an LID
+      const participant = msg.key.participant;
+      if (participant && participant.endsWith("@lid") && !this.lidMap.has(participant) && this.adapter) {
+        try {
+          const phone = await this.adapter.getLidMapping(participant);
+          if (phone) {
+            this.lidMap.set(participant, phone);
+          }
+        } catch {
+          // ignore lookup failure
         }
       }
 
@@ -627,11 +922,43 @@ export class WhatsAppEngine extends EventEmitter {
 
       this.emit("message", { sessionName: name, message: normalized });
 
-      if (this.adapter) {
-        void this.adapter.putMessage(name, {
-          keyId: msg.key.id,
-          message: msg,
+      if (normalized.fromMe) {
+        this.emitMessageCreate(name, normalized);
+      }
+
+      const unwrapped = unwrapViewOnce(msg);
+      const reactionMsg = (unwrapped.message as proto.IMessage | undefined)?.reactionMessage;
+      if (reactionMsg) {
+        this.emit("message:reaction", {
+          messageId: reactionMsg.key?.id ?? "",
+          chatId: normalized.chatId,
+          reaction: reactionMsg.text ?? "",
+          senderId: normalized.from,
+        });
+      }
+
+      const protoMsg = (unwrapped.message as proto.IMessage | undefined)?.protocolMessage;
+      if (protoMsg && protoMsg.type === proto.Message.ProtocolMessage.Type.REVOKE) {
+        this.emit("message:revoked", {
+          id: msg.key.id,
+          revokedId: protoMsg.key?.id ?? undefined,
+          chatId: normalized.chatId,
+          from: normalized.from,
+          to: normalized.to,
           timestamp: normalized.timestamp,
+        });
+      }
+
+      if (this.adapter) {
+        Promise.resolve(
+          this.adapter.putMessage(name, {
+            keyId: msg.key.id,
+            message: msg,
+            timestamp: normalized.timestamp,
+          }),
+        ).catch((err) => {
+          this.logger.error({ session: name, keyId: msg.key.id, err }, "adapter putMessage failed in handleMessagesUpsert");
+          this.emitError(name, err);
         });
       }
     }

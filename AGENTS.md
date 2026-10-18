@@ -53,6 +53,9 @@ class WhatsAppEngine extends EventEmitter {
   sendText(name: string, chatId: string, text: string): Promise<SendResult>
   sendMedia(name: string, chatId: string, media: MediaInput): Promise<SendResult>
   sendChatState(name: string, chatId: string, state: ChatState): Promise<void>
+  downloadMedia(name: string, message: IncomingMessage | WAMessage | string): Promise<Buffer>
+  listContacts(sessionName?: string): Promise<ContactRecord[]>
+  listChats(sessionName?: string): Promise<ChatRecord[]>
   getStatus(name: string): string | undefined
   getQR(name: string): string | null
   getPairingCode(name: string): string | null
@@ -130,7 +133,7 @@ ChatState = "typing" | "recording" | "paused"
 // messages.ts
 MessageType = "text" | "image" | "video" | "audio" | "voice" | "document" | "sticker" | "location" | "contact" | "poll" | "reaction" | "revoked" | "ephemeral" | "unknown"
 IncomingMessage = NormalizedMessage  // alias
-NormalizedMessage { id, from, to, chatId, body, type, timestamp, fromMe, isGroup, media?, location?, quotedMessage?, ephemeralDuration?, isLidSender?, senderPhone?, viewOnce? }
+NormalizedMessage { id, from, to, chatId, body, type, timestamp, fromMe, isGroup, media?, location?, quotedMessage?, ephemeralDuration?, isLidSender?, senderPhone?, viewOnce?, raw? }
 SendResult { id, timestamp }
 MediaInput { mimetype, data, filename?, caption?, mentions?, ptt? }
 MediaPayload { mimetype, filename?, data?, omitted?, sizeBytes? }

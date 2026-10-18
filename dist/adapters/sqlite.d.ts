@@ -25,9 +25,13 @@ export declare class SQLiteAdapter implements IDatabaseAdapter {
     clearSessionMessages(sessionName: string): Promise<void>;
     getLidMapping(lid: string): Promise<string | null>;
     upsertLidMapping(lid: string, pn: string): Promise<void>;
-    listContacts(): Promise<ContactRecord[]>;
+    listLidMappings(): Promise<Array<{
+        lid: string;
+        pn: string;
+    }>>;
+    listContacts(sessionName?: string): Promise<ContactRecord[]>;
     upsertContact(contact: ContactRecord): Promise<void>;
-    listChats(): Promise<ChatRecord[]>;
+    listChats(sessionName?: string): Promise<ChatRecord[]>;
     upsertChat(chat: ChatRecord): Promise<void>;
 }
 //# sourceMappingURL=sqlite.d.ts.map

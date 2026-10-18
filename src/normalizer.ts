@@ -10,7 +10,7 @@ import {
   type WAMessage,
   extractMessageContent,
   getContentType,
-  type proto,
+  proto,
 } from "@whiskeysockets/baileys";
 
 import type { IncomingMessage, MessageType, SendResult } from "./types/messages.js";
@@ -75,6 +75,13 @@ export function detectMessageType(msg: WAMessage): MessageType {
       return "poll";
     case "reactionMessage":
       return "reaction";
+    case "protocolMessage": {
+      const protoMsg = (content as proto.IMessage).protocolMessage;
+      if (protoMsg?.type === proto.Message.ProtocolMessage.Type.REVOKE) {
+        return "revoked";
+      }
+      return "unknown";
+    }
     default:
       return "unknown";
   }
@@ -173,6 +180,7 @@ export function normalizeIncomingMessage(
     senderPhone,
     pushName,
     viewOnce,
+    raw: msg,
   };
 }
 
@@ -222,6 +230,10 @@ function extractBody(msg: WAMessage, type: MessageType): string {
     case "reaction": {
       const r = content as proto.IMessage;
       return r.reactionMessage?.text ?? "";
+    }
+    case "revoked": {
+      const p = content as proto.IMessage;
+      return p.protocolMessage?.key?.id ?? "";
     }
     default:
       return "";

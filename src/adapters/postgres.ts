@@ -47,19 +47,23 @@ export class PostgresAdapter implements IDatabaseAdapter {
         pn TEXT NOT NULL
       )`,
       `CREATE TABLE IF NOT EXISTS contacts (
-        id TEXT PRIMARY KEY,
+        session_name TEXT NOT NULL DEFAULT '',
+        id TEXT NOT NULL,
         name TEXT,
         push_name TEXT,
         number TEXT,
         is_my_contact BOOLEAN DEFAULT FALSE,
-        is_blocked BOOLEAN DEFAULT FALSE
+        is_blocked BOOLEAN DEFAULT FALSE,
+        PRIMARY KEY (session_name, id)
       )`,
       `CREATE TABLE IF NOT EXISTS chats (
-        id TEXT PRIMARY KEY,
+        session_name TEXT NOT NULL DEFAULT '',
+        id TEXT NOT NULL,
         name TEXT,
         phone_jid TEXT,
         unread_count INT DEFAULT 0,
-        last_message_timestamp BIGINT
+        last_message_timestamp BIGINT,
+        PRIMARY KEY (session_name, id)
       )`,
     ];
     for (const sql of ddl) {
@@ -167,16 +171,26 @@ export class PostgresAdapter implements IDatabaseAdapter {
     );
   }
 
+  async listLidMappings(): Promise<Array<{ lid: string; pn: string }>> {
+    const result = await this.pool.query(`SELECT lid, pn FROM lid_mappings`);
+    return result.rows.map((r) => ({ lid: r.lid, pn: r.pn }));
+  }
+
   /* ─── Contacts ─── */
 
-  async listContacts(): Promise<ContactRecord[]> {
-    const result = await this.pool.query(
-      `SELECT id, name, push_name AS "pushName", number,
-              is_my_contact AS "isMyContact", is_blocked AS "isBlocked"
-       FROM contacts`,
-    );
+  async listContacts(sessionName?: string): Promise<ContactRecord[]> {
+    let sql = `SELECT session_name AS "sessionName", id, name, push_name AS "pushName", number,
+                      is_my_contact AS "isMyContact", is_blocked AS "isBlocked"
+               FROM contacts`;
+    const params: any[] = [];
+    if (sessionName !== undefined) {
+      sql += ` WHERE session_name = $1`;
+      params.push(sessionName);
+    }
+    const result = await this.pool.query(sql, params);
     return result.rows.map((r) => ({
       id: r.id,
+      sessionName: r.sessionName || undefined,
       name: r.name ?? null,
       pushName: r.pushName ?? null,
       number: r.number ?? null,
@@ -186,16 +200,18 @@ export class PostgresAdapter implements IDatabaseAdapter {
   }
 
   async upsertContact(contact: ContactRecord): Promise<void> {
+    const sessionName = contact.sessionName ?? "";
     await this.pool.query(
-      `INSERT INTO contacts (id, name, push_name, number, is_my_contact, is_blocked)
-       VALUES ($1, $2, $3, $4, $5, $6)
-       ON CONFLICT (id) DO UPDATE SET
+      `INSERT INTO contacts (session_name, id, name, push_name, number, is_my_contact, is_blocked)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       ON CONFLICT (session_name, id) DO UPDATE SET
          name = EXCLUDED.name,
          push_name = EXCLUDED.push_name,
          number = EXCLUDED.number,
          is_my_contact = EXCLUDED.is_my_contact,
          is_blocked = EXCLUDED.is_blocked`,
       [
+        sessionName,
         contact.id,
         contact.name ?? null,
         contact.pushName ?? null,
@@ -208,14 +224,19 @@ export class PostgresAdapter implements IDatabaseAdapter {
 
   /* ─── Chats ─── */
 
-  async listChats(): Promise<ChatRecord[]> {
-    const result = await this.pool.query(
-      `SELECT id, name, phone_jid AS "phoneJid", unread_count AS "unreadCount",
-              last_message_timestamp AS "lastMessageTimestamp"
-       FROM chats`,
-    );
+  async listChats(sessionName?: string): Promise<ChatRecord[]> {
+    let sql = `SELECT session_name AS "sessionName", id, name, phone_jid AS "phoneJid",
+                      unread_count AS "unreadCount", last_message_timestamp AS "lastMessageTimestamp"
+               FROM chats`;
+    const params: any[] = [];
+    if (sessionName !== undefined) {
+      sql += ` WHERE session_name = $1`;
+      params.push(sessionName);
+    }
+    const result = await this.pool.query(sql, params);
     return result.rows.map((r) => ({
       id: r.id,
+      sessionName: r.sessionName || undefined,
       name: r.name ?? null,
       phoneJid: r.phoneJid ?? null,
       unreadCount: r.unreadCount ?? 0,
@@ -224,15 +245,17 @@ export class PostgresAdapter implements IDatabaseAdapter {
   }
 
   async upsertChat(chat: ChatRecord): Promise<void> {
+    const sessionName = chat.sessionName ?? "";
     await this.pool.query(
-      `INSERT INTO chats (id, name, phone_jid, unread_count, last_message_timestamp)
-       VALUES ($1, $2, $3, $4, $5)
-       ON CONFLICT (id) DO UPDATE SET
+      `INSERT INTO chats (session_name, id, name, phone_jid, unread_count, last_message_timestamp)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (session_name, id) DO UPDATE SET
          name = EXCLUDED.name,
          phone_jid = EXCLUDED.phone_jid,
          unread_count = EXCLUDED.unread_count,
          last_message_timestamp = EXCLUDED.last_message_timestamp`,
       [
+        sessionName,
         chat.id,
         chat.name ?? null,
         chat.phoneJid ?? null,

@@ -9,6 +9,7 @@
  *
  * Never `@s.whatsapp.net`, never `:device` suffix.
  */
+import type { WAMessage } from "@whiskeysockets/baileys";
 export type MessageType = "text" | "image" | "video" | "audio" | "voice" | "document" | "sticker" | "location" | "contact" | "poll" | "reaction" | "revoked" | "ephemeral" | "unknown";
 export interface MediaPayload {
     mimetype: string;
@@ -49,6 +50,8 @@ export interface NormalizedMessage {
     /** Sender's WhatsApp profile name (Baileys pushName). */
     pushName?: string | null;
     viewOnce?: boolean;
+    /** Raw underlying Baileys message when available (e.g. for media downloads or extensions). */
+    raw?: WAMessage;
 }
 /**
  * Incoming message — same shape as NormalizedMessage.

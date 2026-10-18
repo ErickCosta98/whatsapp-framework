@@ -10,6 +10,8 @@
  * Never `@s.whatsapp.net`, never `:device` suffix.
  */
 
+import type { WAMessage } from "@whiskeysockets/baileys";
+
 export type MessageType =
   | "text"
   | "image"
@@ -68,6 +70,8 @@ export interface NormalizedMessage {
   /** Sender's WhatsApp profile name (Baileys pushName). */
   pushName?: string | null;
   viewOnce?: boolean;
+  /** Raw underlying Baileys message when available (e.g. for media downloads or extensions). */
+  raw?: WAMessage;
 }
 
 /**

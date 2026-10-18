@@ -183,5 +183,41 @@ describe("adapters / sqlite", () => {
       const chats = await adapter.listChats();
       expect(chats).toEqual([]);
     });
+
+    it("isolates chats and contacts by sessionName", async () => {
+      const adapter = await createAdapter();
+      await adapter.upsertContact({ sessionName: "bot-1", id: "user-1", name: "Alice (Bot 1)" });
+      await adapter.upsertContact({ sessionName: "bot-2", id: "user-1", name: "Alice (Bot 2)" });
+
+      const bot1Contacts = await adapter.listContacts("bot-1");
+      const bot2Contacts = await adapter.listContacts("bot-2");
+      const allContacts = await adapter.listContacts();
+
+      expect(bot1Contacts).toHaveLength(1);
+      expect(bot1Contacts[0].name).toBe("Alice (Bot 1)");
+      expect(bot2Contacts).toHaveLength(1);
+      expect(bot2Contacts[0].name).toBe("Alice (Bot 2)");
+      expect(allContacts).toHaveLength(2);
+
+      await adapter.upsertChat({ sessionName: "bot-1", id: "chat-1", name: "Sales", unreadCount: 2 });
+      await adapter.upsertChat({ sessionName: "bot-2", id: "chat-1", name: "Support", unreadCount: 0 });
+
+      const bot1Chats = await adapter.listChats("bot-1");
+      const bot2Chats = await adapter.listChats("bot-2");
+      expect(bot1Chats[0].unreadCount).toBe(2);
+      expect(bot2Chats[0].unreadCount).toBe(0);
+    });
+
+    it("listLidMappings returns all stored LID mappings", async () => {
+      const adapter = await createAdapter();
+      await adapter.upsertLidMapping("lid-1", "5551111");
+      await adapter.upsertLidMapping("lid-2", "5552222");
+
+      const mappings = await adapter.listLidMappings();
+      expect(mappings).toEqual([
+        { lid: "lid-1", pn: "5551111" },
+        { lid: "lid-2", pn: "5552222" },
+      ]);
+    });
   });
 });

@@ -1,5 +1,6 @@
 import { EventEmitter } from "events";
-import type { IDatabaseAdapter, WhatsAppEngineConfig, ChatState, SendResult, MediaInput, EngineEventMap } from "./types/index.js";
+import { type WAMessage } from "@whiskeysockets/baileys";
+import type { IDatabaseAdapter, WhatsAppEngineConfig, ChatState, SendResult, MediaInput, EngineEventMap, ContactRecord, ChatRecord, IncomingMessage } from "./types/index.js";
 /**
  * Core WhatsApp engine managing multiple named sessions, connection lifecycle,
  * reconnection backoff, and message normalization.
@@ -29,6 +30,8 @@ export declare class WhatsAppEngine extends EventEmitter {
     private lidMap;
     /** Per-session in-memory message stores for Baileys retry protocol. */
     private messageStores;
+    /** Deduplication cache for message:create events. */
+    private createdMessageIds;
     constructor(config: WhatsAppEngineConfig);
     private resolveConfig;
     /**
@@ -47,6 +50,8 @@ export declare class WhatsAppEngine extends EventEmitter {
      * @throws if no adapter is registered
      */
     connect(name: string): Promise<void>;
+    private emitError;
+    private emitMessageCreate;
     private connectInner;
     /**
      * Gracefully stop a session: clear timers, end the socket, and update status.
@@ -63,6 +68,7 @@ export declare class WhatsAppEngine extends EventEmitter {
      * @throws if the session is already authenticated
      */
     requestPairingCode(name: string, phoneNumber: string): Promise<string>;
+    private resolveDeliverableJidAsync;
     /**
      * Send a text message through a connected session.
      *
@@ -82,6 +88,23 @@ export declare class WhatsAppEngine extends EventEmitter {
      * @throws if the session is not connected
      */
     sendChatState(name: string, chatId: string, state: ChatState): Promise<void>;
+    /**
+     * Download and decrypt media content from an incoming message or message ID.
+     *
+     * @param name — session name
+     * @param message — IncomingMessage, raw WAMessage, or message ID (string)
+     * @returns Buffer containing decrypted media bytes
+     * @throws if session is not connected or message cannot be found
+     */
+    downloadMedia(name: string, message: IncomingMessage | WAMessage | string): Promise<Buffer>;
+    /**
+     * List contacts from the registered adapter, optionally filtered by session name.
+     */
+    listContacts(sessionName?: string): Promise<ContactRecord[]>;
+    /**
+     * List chats from the registered adapter, optionally filtered by session name.
+     */
+    listChats(sessionName?: string): Promise<ChatRecord[]>;
     /**
      * Get the current connection status of a session.
      */

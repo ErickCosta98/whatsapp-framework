@@ -5,7 +5,7 @@
  * `IncomingMessage` shape. Handles ephemeral / view-once unwrapping,
  * message type detection, JID normalization, and LID resolution.
  */
-import { extractMessageContent, getContentType, } from "@whiskeysockets/baileys";
+import { extractMessageContent, getContentType, proto, } from "@whiskeysockets/baileys";
 import { normalizeJid } from "./lid/resolver.js";
 /** Default media size cap in bytes (50 MB). */
 export const DEFAULT_MEDIA_CAP_BYTES = 50 * 1024 * 1024;
@@ -63,6 +63,13 @@ export function detectMessageType(msg) {
             return "poll";
         case "reactionMessage":
             return "reaction";
+        case "protocolMessage": {
+            const protoMsg = content.protocolMessage;
+            if (protoMsg?.type === proto.Message.ProtocolMessage.Type.REVOKE) {
+                return "revoked";
+            }
+            return "unknown";
+        }
         default:
             return "unknown";
     }
@@ -143,6 +150,7 @@ export function normalizeIncomingMessage(msg, lidMap) {
         senderPhone,
         pushName,
         viewOnce,
+        raw: msg,
     };
 }
 /**
@@ -186,6 +194,10 @@ function extractBody(msg, type) {
         case "reaction": {
             const r = content;
             return r.reactionMessage?.text ?? "";
+        }
+        case "revoked": {
+            const p = content;
+            return p.protocolMessage?.key?.id ?? "";
         }
         default:
             return "";
