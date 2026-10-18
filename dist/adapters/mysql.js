@@ -35,19 +35,23 @@ export class MySQLAdapter {
         pn VARCHAR(50) NOT NULL
       )`,
             `CREATE TABLE IF NOT EXISTS contacts (
-        id VARCHAR(255) PRIMARY KEY,
+        session_name VARCHAR(255) NOT NULL DEFAULT '',
+        id VARCHAR(255) NOT NULL,
         name VARCHAR(255),
         push_name VARCHAR(255),
         number VARCHAR(50),
         is_my_contact BOOLEAN DEFAULT FALSE,
-        is_blocked BOOLEAN DEFAULT FALSE
+        is_blocked BOOLEAN DEFAULT FALSE,
+        PRIMARY KEY (session_name, id)
       )`,
             `CREATE TABLE IF NOT EXISTS chats (
-        id VARCHAR(255) PRIMARY KEY,
+        session_name VARCHAR(255) NOT NULL DEFAULT '',
+        id VARCHAR(255) NOT NULL,
         name VARCHAR(255),
         phone_jid VARCHAR(255),
         unread_count INT DEFAULT 0,
-        last_message_timestamp BIGINT
+        last_message_timestamp BIGINT,
+        PRIMARY KEY (session_name, id)
       )`,
         ];
         for (const sql of ddl) {
@@ -125,13 +129,24 @@ export class MySQLAdapter {
         await this.pool.execute(`INSERT INTO lid_mappings (lid, pn) VALUES (?, ?)
        ON DUPLICATE KEY UPDATE pn = VALUES(pn)`, [lid, pn]);
     }
+    async listLidMappings() {
+        const [rows] = await this.pool.execute(`SELECT lid, pn FROM lid_mappings`);
+        return rows.map((r) => ({ lid: r.lid, pn: r.pn }));
+    }
     /* ─── Contacts ─── */
-    async listContacts() {
-        const [rows] = await this.pool.execute(`SELECT id, name, push_name AS pushName, number,
-              is_my_contact AS isMyContact, is_blocked AS isBlocked
-       FROM contacts`);
+    async listContacts(sessionName) {
+        let sql = `SELECT session_name AS sessionName, id, name, push_name AS pushName, number,
+                      is_my_contact AS isMyContact, is_blocked AS isBlocked
+               FROM contacts`;
+        const params = [];
+        if (sessionName !== undefined) {
+            sql += ` WHERE session_name = ?`;
+            params.push(sessionName);
+        }
+        const [rows] = await this.pool.execute(sql, params);
         return rows.map((r) => ({
             id: r.id,
+            sessionName: r.sessionName || undefined,
             name: r.name ?? null,
             pushName: r.pushName ?? null,
             number: r.number ?? null,
@@ -140,14 +155,16 @@ export class MySQLAdapter {
         }));
     }
     async upsertContact(contact) {
-        await this.pool.execute(`INSERT INTO contacts (id, name, push_name, number, is_my_contact, is_blocked)
-       VALUES (?, ?, ?, ?, ?, ?)
+        const sessionName = contact.sessionName ?? "";
+        await this.pool.execute(`INSERT INTO contacts (session_name, id, name, push_name, number, is_my_contact, is_blocked)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
        ON DUPLICATE KEY UPDATE
          name = VALUES(name),
          push_name = VALUES(push_name),
          number = VALUES(number),
          is_my_contact = VALUES(is_my_contact),
          is_blocked = VALUES(is_blocked)`, [
+            sessionName,
             contact.id,
             contact.name ?? null,
             contact.pushName ?? null,
@@ -157,12 +174,19 @@ export class MySQLAdapter {
         ]);
     }
     /* ─── Chats ─── */
-    async listChats() {
-        const [rows] = await this.pool.execute(`SELECT id, name, phone_jid AS phoneJid, unread_count AS unreadCount,
-              last_message_timestamp AS lastMessageTimestamp
-       FROM chats`);
+    async listChats(sessionName) {
+        let sql = `SELECT session_name AS sessionName, id, name, phone_jid AS phoneJid,
+                      unread_count AS unreadCount, last_message_timestamp AS lastMessageTimestamp
+               FROM chats`;
+        const params = [];
+        if (sessionName !== undefined) {
+            sql += ` WHERE session_name = ?`;
+            params.push(sessionName);
+        }
+        const [rows] = await this.pool.execute(sql, params);
         return rows.map((r) => ({
             id: r.id,
+            sessionName: r.sessionName || undefined,
             name: r.name ?? null,
             phoneJid: r.phoneJid ?? null,
             unreadCount: r.unreadCount ?? 0,
@@ -170,13 +194,15 @@ export class MySQLAdapter {
         }));
     }
     async upsertChat(chat) {
-        await this.pool.execute(`INSERT INTO chats (id, name, phone_jid, unread_count, last_message_timestamp)
-       VALUES (?, ?, ?, ?, ?)
+        const sessionName = chat.sessionName ?? "";
+        await this.pool.execute(`INSERT INTO chats (session_name, id, name, phone_jid, unread_count, last_message_timestamp)
+       VALUES (?, ?, ?, ?, ?, ?)
        ON DUPLICATE KEY UPDATE
          name = VALUES(name),
          phone_jid = VALUES(phone_jid),
          unread_count = VALUES(unread_count),
          last_message_timestamp = VALUES(last_message_timestamp)`, [
+            sessionName,
             chat.id,
             chat.name ?? null,
             chat.phoneJid ?? null,

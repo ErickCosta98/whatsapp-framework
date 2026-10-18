@@ -40,20 +40,24 @@ export class SQLiteAdapter {
       );
 
       CREATE TABLE IF NOT EXISTS contacts (
-        id TEXT PRIMARY KEY,
+        session_name TEXT NOT NULL DEFAULT '',
+        id TEXT NOT NULL,
         name TEXT,
         push_name TEXT,
         number TEXT,
         is_my_contact INTEGER DEFAULT 0,
-        is_blocked INTEGER DEFAULT 0
+        is_blocked INTEGER DEFAULT 0,
+        PRIMARY KEY (session_name, id)
       );
 
       CREATE TABLE IF NOT EXISTS chats (
-        id TEXT PRIMARY KEY,
+        session_name TEXT NOT NULL DEFAULT '',
+        id TEXT NOT NULL,
         name TEXT,
         phone_jid TEXT,
         unread_count INTEGER DEFAULT 0,
-        last_message_timestamp INTEGER
+        last_message_timestamp INTEGER,
+        PRIMARY KEY (session_name, id)
       );
     `;
         this.db.exec(ddl);
@@ -136,15 +140,26 @@ export class SQLiteAdapter {
             .run(lid, pn);
         return Promise.resolve();
     }
-    /* ─── Contacts ─── */
-    listContacts() {
+    listLidMappings() {
         const rows = this.db
-            .prepare(`SELECT id, name, push_name AS pushName, number,
-                is_my_contact AS isMyContact, is_blocked AS isBlocked
-         FROM contacts`)
+            .prepare(`SELECT lid, pn FROM lid_mappings`)
             .all();
+        return Promise.resolve(rows);
+    }
+    /* ─── Contacts ─── */
+    listContacts(sessionName) {
+        let query = `SELECT session_name AS sessionName, id, name, push_name AS pushName, number,
+                        is_my_contact AS isMyContact, is_blocked AS isBlocked
+                 FROM contacts`;
+        const params = [];
+        if (sessionName !== undefined) {
+            query += ` WHERE session_name = ?`;
+            params.push(sessionName);
+        }
+        const rows = this.db.prepare(query).all(...params);
         return Promise.resolve(rows.map((r) => ({
             id: r.id,
+            sessionName: r.sessionName || undefined,
             name: r.name,
             pushName: r.pushName,
             number: r.number,
@@ -153,27 +168,33 @@ export class SQLiteAdapter {
         })));
     }
     upsertContact(contact) {
+        const sessionName = contact.sessionName ?? "";
         this.db
-            .prepare(`INSERT INTO contacts (id, name, push_name, number, is_my_contact, is_blocked)
-         VALUES (?, ?, ?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET
+            .prepare(`INSERT INTO contacts (session_name, id, name, push_name, number, is_my_contact, is_blocked)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(session_name, id) DO UPDATE SET
            name = excluded.name,
            push_name = excluded.push_name,
            number = excluded.number,
            is_my_contact = excluded.is_my_contact,
            is_blocked = excluded.is_blocked`)
-            .run(contact.id, contact.name ?? null, contact.pushName ?? null, contact.number ?? null, contact.isMyContact ? 1 : 0, contact.isBlocked ? 1 : 0);
+            .run(sessionName, contact.id, contact.name ?? null, contact.pushName ?? null, contact.number ?? null, contact.isMyContact ? 1 : 0, contact.isBlocked ? 1 : 0);
         return Promise.resolve();
     }
     /* ─── Chats ─── */
-    listChats() {
-        const rows = this.db
-            .prepare(`SELECT id, name, phone_jid AS phoneJid, unread_count AS unreadCount,
-                last_message_timestamp AS lastMessageTimestamp
-         FROM chats`)
-            .all();
+    listChats(sessionName) {
+        let query = `SELECT session_name AS sessionName, id, name, phone_jid AS phoneJid,
+                        unread_count AS unreadCount, last_message_timestamp AS lastMessageTimestamp
+                 FROM chats`;
+        const params = [];
+        if (sessionName !== undefined) {
+            query += ` WHERE session_name = ?`;
+            params.push(sessionName);
+        }
+        const rows = this.db.prepare(query).all(...params);
         return Promise.resolve(rows.map((r) => ({
             id: r.id,
+            sessionName: r.sessionName || undefined,
             name: r.name,
             phoneJid: r.phoneJid,
             unreadCount: r.unreadCount,
@@ -181,15 +202,16 @@ export class SQLiteAdapter {
         })));
     }
     upsertChat(chat) {
+        const sessionName = chat.sessionName ?? "";
         this.db
-            .prepare(`INSERT INTO chats (id, name, phone_jid, unread_count, last_message_timestamp)
-         VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET
+            .prepare(`INSERT INTO chats (session_name, id, name, phone_jid, unread_count, last_message_timestamp)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(session_name, id) DO UPDATE SET
            name = excluded.name,
            phone_jid = excluded.phone_jid,
            unread_count = excluded.unread_count,
            last_message_timestamp = excluded.last_message_timestamp`)
-            .run(chat.id, chat.name ?? null, chat.phoneJid ?? null, chat.unreadCount ?? 0, chat.lastMessageTimestamp ?? null);
+            .run(sessionName, chat.id, chat.name ?? null, chat.phoneJid ?? null, chat.unreadCount ?? 0, chat.lastMessageTimestamp ?? null);
         return Promise.resolve();
     }
 }

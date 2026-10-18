@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import type { WAMessage, proto } from "@whiskeysockets/baileys";
+import { type WAMessage, proto } from "@whiskeysockets/baileys";
 import {
   detectMessageType,
   unwrapViewOnce,
@@ -109,6 +109,16 @@ describe("normalizer / detectMessageType", () => {
     const msg = makeMessage({});
     (msg as any).message = undefined;
     expect(detectMessageType(msg)).toBe("unknown");
+  });
+
+  it("detects revoked message", () => {
+    const msg = makeMessage({
+      protocolMessage: {
+        key: { id: "orig-1" },
+        type: proto.Message.ProtocolMessage.Type.REVOKE,
+      },
+    });
+    expect(detectMessageType(msg)).toBe("revoked");
   });
 });
 
@@ -298,6 +308,19 @@ describe("normalizer / normalizeIncomingMessage", () => {
     expect(normalized.type).toBe("unknown");
     expect(normalized.body).toBe("");
     expect(normalized.media).toBeUndefined();
+  });
+
+  it("normalizes a revoked message and sets body to revoked key id", () => {
+    const msg = makeMessage({
+      protocolMessage: {
+        key: { id: "orig-123" },
+        type: proto.Message.ProtocolMessage.Type.REVOKE,
+      },
+    });
+    const normalized = normalizeIncomingMessage(msg);
+    expect(normalized.type).toBe("revoked");
+    expect(normalized.body).toBe("orig-123");
+    expect(normalized.raw).toBe(msg);
   });
 });
 

@@ -20,6 +20,7 @@ export interface StoredMessage {
 }
 export interface ContactRecord {
     id: string;
+    sessionName?: string;
     name?: string | null;
     pushName?: string | null;
     number?: string | null;
@@ -28,6 +29,7 @@ export interface ContactRecord {
 }
 export interface ChatRecord {
     id: string;
+    sessionName?: string;
     name?: string | null;
     phoneJid?: string | null;
     unreadCount?: number;
@@ -45,11 +47,15 @@ export interface IDatabaseAdapter {
     /** LID mappings */
     getLidMapping(lid: string): Promise<string | null>;
     upsertLidMapping(lid: string, pn: string): Promise<void>;
+    listLidMappings?(): Promise<Array<{
+        lid: string;
+        pn: string;
+    }>>;
     /** Contacts */
-    listContacts(): Promise<ContactRecord[]>;
+    listContacts(sessionName?: string): Promise<ContactRecord[]>;
     upsertContact(contact: ContactRecord): Promise<void>;
     /** Chats */
-    listChats(): Promise<ChatRecord[]>;
+    listChats(sessionName?: string): Promise<ChatRecord[]>;
     upsertChat(chat: ChatRecord): Promise<void>;
 }
 //# sourceMappingURL=adapter.d.ts.map

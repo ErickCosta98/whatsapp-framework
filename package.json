@@ -1,6 +1,6 @@
 {
   "name": "@erickcosta98/whatsapp-framework",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Unified WhatsApp engine built on Baileys with multi-session, anti-ban, and database abstraction",
   "repository": {
     "type": "git",

@@ -159,7 +159,7 @@ describe("adapters / postgres (mocked)", () => {
       await adapter.upsertContact(contact);
       const sql = mockQuery.mock.calls[0][0] as string;
       expect(sql).toMatch(/INSERT INTO contacts/);
-      expect(sql).toMatch(/ON CONFLICT \(id\) DO UPDATE/);
+      expect(sql).toMatch(/ON CONFLICT \(session_name,\s*id\) DO UPDATE/);
     });
   });
 
@@ -186,7 +186,7 @@ describe("adapters / postgres (mocked)", () => {
       await adapter.upsertChat(chat);
       const sql = mockQuery.mock.calls[0][0] as string;
       expect(sql).toMatch(/INSERT INTO chats/);
-      expect(sql).toMatch(/ON CONFLICT \(id\) DO UPDATE/);
+      expect(sql).toMatch(/ON CONFLICT \(session_name,\s*id\) DO UPDATE/);
     });
   });
 

@@ -54,20 +54,24 @@ export class SQLiteAdapter implements IDatabaseAdapter {
       );
 
       CREATE TABLE IF NOT EXISTS contacts (
-        id TEXT PRIMARY KEY,
+        session_name TEXT NOT NULL DEFAULT '',
+        id TEXT NOT NULL,
         name TEXT,
         push_name TEXT,
         number TEXT,
         is_my_contact INTEGER DEFAULT 0,
-        is_blocked INTEGER DEFAULT 0
+        is_blocked INTEGER DEFAULT 0,
+        PRIMARY KEY (session_name, id)
       );
 
       CREATE TABLE IF NOT EXISTS chats (
-        id TEXT PRIMARY KEY,
+        session_name TEXT NOT NULL DEFAULT '',
+        id TEXT NOT NULL,
         name TEXT,
         phone_jid TEXT,
         unread_count INTEGER DEFAULT 0,
-        last_message_timestamp INTEGER
+        last_message_timestamp INTEGER,
+        PRIMARY KEY (session_name, id)
       );
     `;
     this.db.exec(ddl);
@@ -193,16 +197,26 @@ export class SQLiteAdapter implements IDatabaseAdapter {
     return Promise.resolve();
   }
 
+  listLidMappings(): Promise<Array<{ lid: string; pn: string }>> {
+    const rows = this.db
+      .prepare(`SELECT lid, pn FROM lid_mappings`)
+      .all() as Array<{ lid: string; pn: string }>;
+    return Promise.resolve(rows);
+  }
+
   /* ─── Contacts ─── */
 
-  listContacts(): Promise<ContactRecord[]> {
-    const rows = this.db
-      .prepare(
-        `SELECT id, name, push_name AS pushName, number,
-                is_my_contact AS isMyContact, is_blocked AS isBlocked
-         FROM contacts`,
-      )
-      .all() as Array<{
+  listContacts(sessionName?: string): Promise<ContactRecord[]> {
+    let query = `SELECT session_name AS sessionName, id, name, push_name AS pushName, number,
+                        is_my_contact AS isMyContact, is_blocked AS isBlocked
+                 FROM contacts`;
+    const params: any[] = [];
+    if (sessionName !== undefined) {
+      query += ` WHERE session_name = ?`;
+      params.push(sessionName);
+    }
+    const rows = this.db.prepare(query).all(...params) as Array<{
+      sessionName: string;
       id: string;
       name: string | null;
       pushName: string | null;
@@ -213,6 +227,7 @@ export class SQLiteAdapter implements IDatabaseAdapter {
     return Promise.resolve(
       rows.map((r) => ({
         id: r.id,
+        sessionName: r.sessionName || undefined,
         name: r.name,
         pushName: r.pushName,
         number: r.number,
@@ -223,11 +238,12 @@ export class SQLiteAdapter implements IDatabaseAdapter {
   }
 
   upsertContact(contact: ContactRecord): Promise<void> {
+    const sessionName = contact.sessionName ?? "";
     this.db
       .prepare(
-        `INSERT INTO contacts (id, name, push_name, number, is_my_contact, is_blocked)
-         VALUES (?, ?, ?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET
+        `INSERT INTO contacts (session_name, id, name, push_name, number, is_my_contact, is_blocked)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(session_name, id) DO UPDATE SET
            name = excluded.name,
            push_name = excluded.push_name,
            number = excluded.number,
@@ -235,6 +251,7 @@ export class SQLiteAdapter implements IDatabaseAdapter {
            is_blocked = excluded.is_blocked`,
       )
       .run(
+        sessionName,
         contact.id,
         contact.name ?? null,
         contact.pushName ?? null,
@@ -247,14 +264,17 @@ export class SQLiteAdapter implements IDatabaseAdapter {
 
   /* ─── Chats ─── */
 
-  listChats(): Promise<ChatRecord[]> {
-    const rows = this.db
-      .prepare(
-        `SELECT id, name, phone_jid AS phoneJid, unread_count AS unreadCount,
-                last_message_timestamp AS lastMessageTimestamp
-         FROM chats`,
-      )
-      .all() as Array<{
+  listChats(sessionName?: string): Promise<ChatRecord[]> {
+    let query = `SELECT session_name AS sessionName, id, name, phone_jid AS phoneJid,
+                        unread_count AS unreadCount, last_message_timestamp AS lastMessageTimestamp
+                 FROM chats`;
+    const params: any[] = [];
+    if (sessionName !== undefined) {
+      query += ` WHERE session_name = ?`;
+      params.push(sessionName);
+    }
+    const rows = this.db.prepare(query).all(...params) as Array<{
+      sessionName: string;
       id: string;
       name: string | null;
       phoneJid: string | null;
@@ -264,6 +284,7 @@ export class SQLiteAdapter implements IDatabaseAdapter {
     return Promise.resolve(
       rows.map((r) => ({
         id: r.id,
+        sessionName: r.sessionName || undefined,
         name: r.name,
         phoneJid: r.phoneJid,
         unreadCount: r.unreadCount,
@@ -273,17 +294,19 @@ export class SQLiteAdapter implements IDatabaseAdapter {
   }
 
   upsertChat(chat: ChatRecord): Promise<void> {
+    const sessionName = chat.sessionName ?? "";
     this.db
       .prepare(
-        `INSERT INTO chats (id, name, phone_jid, unread_count, last_message_timestamp)
-         VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET
+        `INSERT INTO chats (session_name, id, name, phone_jid, unread_count, last_message_timestamp)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(session_name, id) DO UPDATE SET
            name = excluded.name,
            phone_jid = excluded.phone_jid,
            unread_count = excluded.unread_count,
            last_message_timestamp = excluded.last_message_timestamp`,
       )
       .run(
+        sessionName,
         chat.id,
         chat.name ?? null,
         chat.phoneJid ?? null,
