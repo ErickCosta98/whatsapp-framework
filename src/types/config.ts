@@ -2,6 +2,8 @@
  * Engine configuration types.
  */
 
+import type { Logger, DestinationStream } from "pino";
+
 export interface WhatsAppEngineConfig {
   /** Directory for Baileys auth state files per session. */
   authDir: string;
@@ -21,6 +23,10 @@ export interface WhatsAppEngineConfig {
   messageStoreCap?: number;
   /** Pino log level. Default: "warn". */
   logLevel?: string;
+  /** Preconfigured Pino Logger instance. Takes precedence over logLevel and logDestination. */
+  logger?: Logger;
+  /** Destination stream for Pino logs. Default: process.stderr (pino.destination(2)). */
+  logDestination?: DestinationStream;
   /** Maximum media upload size in bytes. Default: 50 MB. */
   mediaMaxSize?: number;
   /**

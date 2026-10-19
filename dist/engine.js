@@ -29,6 +29,8 @@ import { createMessageStore } from "./retry/store.js";
  * await engine.connect("bot-1");
  * ```
  */
+/** Shared module-level stderr destination to avoid descriptor/buffer leaks across instances. */
+const defaultStderrDestination = pino.destination(2);
 export class WhatsAppEngine extends EventEmitter {
     config;
     logger;
@@ -43,7 +45,9 @@ export class WhatsAppEngine extends EventEmitter {
     constructor(config) {
         super();
         this.config = this.resolveConfig(config);
-        this.logger = pino({ level: this.config.logLevel });
+        this.logger =
+            this.config.logger ??
+                pino({ level: this.config.logLevel }, this.config.logDestination ?? defaultStderrDestination);
         this.sessions = new SessionManager();
     }
     /* ─── Configuration ─── */
@@ -60,6 +64,8 @@ export class WhatsAppEngine extends EventEmitter {
             logLevel: config.logLevel ?? "warn",
             mediaMaxSize: config.mediaMaxSize ?? DEFAULT_MEDIA_CAP_BYTES,
             syncFullHistory: config.syncFullHistory ?? false,
+            logger: config.logger,
+            logDestination: config.logDestination,
         };
     }
     /* ─── Public API ─── */
