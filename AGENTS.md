@@ -127,7 +127,7 @@ classifyDisconnect(statusCode: number | undefined): "terminal" | "transient" | "
 
 ```ts
 // config.ts
-WhatsAppEngineConfig { authDir, browser?, markOnlineOnConnect?, simulateTyping?, simulateTypingMaxMs?, delayBetweenMessages?, randomizeDelay?, messageStoreCap?, logLevel?, mediaMaxSize? }
+WhatsAppEngineConfig { authDir, browser?, markOnlineOnConnect?, simulateTyping?, simulateTypingMaxMs?, delayBetweenMessages?, randomizeDelay?, messageStoreCap?, logLevel?, logger?, logDestination?, mediaMaxSize?, syncFullHistory? }
 ChatState = "typing" | "recording" | "paused"
 
 // messages.ts

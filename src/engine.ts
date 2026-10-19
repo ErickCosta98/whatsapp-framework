@@ -1,5 +1,5 @@
 import { EventEmitter } from "events";
-import type { Logger } from "pino";
+import type { Logger, DestinationStream } from "pino";
 import pino from "pino";
 import makeWASocket, {
   useMultiFileAuthState,
@@ -56,8 +56,19 @@ import { createMessageStore, type MessageStore } from "./retry/store.js";
  * await engine.connect("bot-1");
  * ```
  */
+
+/** Shared module-level stderr destination to avoid descriptor/buffer leaks across instances. */
+const defaultStderrDestination = pino.destination(2);
+
+export type ResolvedEngineConfig = Required<
+  Omit<WhatsAppEngineConfig, "logger" | "logDestination">
+> & {
+  logger?: Logger;
+  logDestination?: DestinationStream;
+};
+
 export class WhatsAppEngine extends EventEmitter {
-  private config: Required<WhatsAppEngineConfig>;
+  private config: ResolvedEngineConfig;
   private logger: Logger;
   private sessions: SessionManager;
   private adapter: IDatabaseAdapter | null = null;
@@ -74,7 +85,12 @@ export class WhatsAppEngine extends EventEmitter {
   constructor(config: WhatsAppEngineConfig) {
     super();
     this.config = this.resolveConfig(config);
-    this.logger = pino({ level: this.config.logLevel });
+    this.logger =
+      this.config.logger ??
+      pino(
+        { level: this.config.logLevel },
+        this.config.logDestination ?? defaultStderrDestination,
+      );
     this.sessions = new SessionManager();
   }
 
@@ -82,7 +98,7 @@ export class WhatsAppEngine extends EventEmitter {
 
   private resolveConfig(
     config: WhatsAppEngineConfig,
-  ): Required<WhatsAppEngineConfig> {
+  ): ResolvedEngineConfig {
     return {
       authDir: config.authDir,
       browser: config.browser ?? ["WhatsApp Framework", "Chrome", "120.0.0"],
@@ -95,6 +111,8 @@ export class WhatsAppEngine extends EventEmitter {
       logLevel: config.logLevel ?? "warn",
       mediaMaxSize: config.mediaMaxSize ?? DEFAULT_MEDIA_CAP_BYTES,
       syncFullHistory: config.syncFullHistory ?? false,
+      logger: config.logger,
+      logDestination: config.logDestination,
     };
   }
 

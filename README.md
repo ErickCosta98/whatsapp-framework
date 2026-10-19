@@ -52,6 +52,8 @@ await engine.stop();
 | `randomizeDelay` | `boolean` | `true` | Add random jitter (0–2000ms) between bulk sends. |
 | `messageStoreCap` | `number` | `5000` | Max messages stored per session for retry protocol. |
 | `logLevel` | `string` | `"warn"` | Pino log level (`"fatal"`, `"error"`, `"warn"`, `"info"`, `"debug"`, `"trace"`). |
+| `logger` | `Logger` | `undefined` | Preconfigured Pino Logger instance (takes precedence over `logLevel` and `logDestination`). |
+| `logDestination` | `DestinationStream` | `process.stderr` | Stream destination for Pino logs. Defaults to stderr (`pino.destination(2)`). |
 | `mediaMaxSize` | `number` | `52428800` (50 MB) | Maximum media upload size in bytes. |
 
 ## API Reference

@@ -1,26 +1,11 @@
 import { EventEmitter } from "events";
+import type { Logger, DestinationStream } from "pino";
 import { type WAMessage } from "@whiskeysockets/baileys";
 import type { IDatabaseAdapter, WhatsAppEngineConfig, ChatState, SendResult, MediaInput, EngineEventMap, ContactRecord, ChatRecord, IncomingMessage } from "./types/index.js";
-/**
- * Core WhatsApp engine managing multiple named sessions, connection lifecycle,
- * reconnection backoff, and message normalization.
- *
- * Emits typed events via Node.js EventEmitter:
- *   - `connection` — session status changes (QR, pairing, connected, etc.)
- *   - `message` — inbound normalized messages
- *   - `message:create` — outgoing messages created by this account
- *   - `message:ack` — delivery status updates
- *   - `message:revoked` — remotely deleted messages
- *   - `message:reaction` — reactions
- *   - `error` — session errors
- *
- * @example
- * ```ts
- * const engine = new WhatsAppEngine({ authDir: "./auth" });
- * engine.on("connection", (ev) => console.log(ev.status));
- * await engine.connect("bot-1");
- * ```
- */
+export type ResolvedEngineConfig = Required<Omit<WhatsAppEngineConfig, "logger" | "logDestination">> & {
+    logger?: Logger;
+    logDestination?: DestinationStream;
+};
 export declare class WhatsAppEngine extends EventEmitter {
     private config;
     private logger;
